@@ -92,9 +92,9 @@ func (ts *TransactionSender) SignTransaction(tx *types.Transaction, wallet *Wall
 
 func (ts *TransactionSender) SendTransaction(ctx context.Context, signedTx *types.Transaction) (*TxResult, error) {
 	startTime := time.Now()
-	
+
 	err := ts.client.SendTransaction(ctx, signedTx)
-	
+
 	executionTime := time.Since(startTime).Seconds() * 1000 // Convert to milliseconds
 
 	result := &TxResult{
@@ -154,6 +154,34 @@ func (ts *TransactionSender) SendMultipleTransactions(ctx context.Context, reque
 
 func (ts *TransactionSender) Close() {
 	ts.client.Close()
+}
+
+// WaitForReceipt waits for a transaction to be mined and returns the receipt
+func (ts *TransactionSender) WaitForReceipt(ctx context.Context, txHash common.Hash, timeout time.Duration) (*types.Receipt, error) {
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Poll for receipt
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout waiting for transaction receipt")
+		case <-ticker.C:
+			receipt, err := ts.client.TransactionReceipt(ctx, txHash)
+			if err == nil {
+				return receipt, nil
+			}
+			// If error is not "not found", return it
+			if err.Error() != "not found" {
+				// Continue polling for "not found" errors
+				continue
+			}
+		}
+	}
 }
 
 // PrepareBatchTransactions prepares multiple transactions with precalculated nonces

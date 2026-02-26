@@ -3,7 +3,7 @@
 # Performance Analysis Script for go-tps
 # This script provides easy access to common database queries
 
-DB_PATH="${DB_PATH:-./transactions.db}"
+DB_PATH="${DB_PATH:-./transactions1.db}"
 
 if [ ! -f "$DB_PATH" ]; then
     echo "Error: Database file not found at $DB_PATH"

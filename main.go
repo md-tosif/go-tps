@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -126,68 +127,127 @@ func main() {
 	totalFailed := 0
 	startTime := time.Now()
 
+	// Use mutex for thread-safe counter updates
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
 	fmt.Println("Starting transaction submission...")
 	fmt.Println(strings.Repeat("=", 60))
 
+	// Process all wallets in parallel
 	for walletIdx, wallet := range wallets {
-		fmt.Printf("\n[Wallet %d/%d] (%s)\n",
-			walletIdx+1, len(wallets), wallet.Address.Hex())
+		wg.Add(1)
+		go func(idx int, w *Wallet) {
+			defer wg.Done()
 
-		// Prepare batch transactions with precalculated nonces
-		txRequests, err := txSender.PrepareBatchTransactions(
-			ctx,
-			wallet,
-			toAddress,
-			value,
-			config.TxPerWallet,
-		)
+			fmt.Printf("\n[Wallet %d/%d] (%s)\n",
+				idx+1, len(wallets), w.Address.Hex())
 
-		if err != nil {
-			fmt.Printf("  Error preparing transactions: %v\n", err)
-			continue
-		}
-
-		// Send all transactions for this wallet
-		for _, req := range txRequests {
-			result, err := txSender.CreateAndSendTransaction(ctx, req)
-
-			// Create database transaction record
-			dbTx := &Transaction{
-				WalletAddress: wallet.Address.Hex(),
-				Nonce:         req.Nonce,
-				ToAddress:     toAddress.Hex(),
-				Value:         value.String(),
-				GasPrice:      req.GasPrice.String(),
-				GasLimit:      req.GasLimit,
-				SubmittedAt:   result.SubmittedAt,
-				ExecutionTime: result.ExecutionTime,
-			}
+			// Prepare batch transactions with precalculated nonces
+			txRequests, err := txSender.PrepareBatchTransactions(
+				ctx,
+				w,
+				toAddress,
+				value,
+				config.TxPerWallet,
+			)
 
 			if err != nil {
-				dbTx.Status = "failed"
-				dbTx.Error = err.Error()
-				totalFailed++
-			} else {
-				dbTx.TxHash = result.TxHash
-				dbTx.Status = result.Status
-				totalSuccessful++
+				fmt.Printf("  Error preparing transactions: %v\n", err)
+				return
 			}
 
-			// Save to database
-			_, dbErr := db.InsertTransaction(dbTx)
-			if dbErr != nil {
-				fmt.Printf("  Warning: Could not save transaction to DB: %v\n", dbErr)
+			// Send all transactions for this wallet
+			for txIdx, req := range txRequests {
+				result, err := txSender.CreateAndSendTransaction(ctx, req)
+
+				// Create database transaction record
+				dbTx := &Transaction{
+					WalletAddress: w.Address.Hex(),
+					Nonce:         req.Nonce,
+					ToAddress:     toAddress.Hex(),
+					Value:         value.String(),
+					GasPrice:      req.GasPrice.String(),
+					GasLimit:      req.GasLimit,
+					SubmittedAt:   result.SubmittedAt,
+					ExecutionTime: result.ExecutionTime,
+				}
+
+				if err != nil {
+					dbTx.Status = "failed"
+					dbTx.Error = err.Error()
+					mu.Lock()
+					totalFailed++
+					totalTransactions++
+					mu.Unlock()
+
+					// Save to database
+					db.InsertTransaction(dbTx)
+				} else {
+					dbTx.TxHash = result.TxHash
+					dbTx.Status = "pending"
+
+					// Save initial pending status to database
+					txID, dbErr := db.InsertTransaction(dbTx)
+					if dbErr != nil {
+						fmt.Printf("  Warning: Could not save transaction to DB: %v\n", dbErr)
+					}
+
+					fmt.Printf("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
+
+					mu.Lock()
+					totalTransactions++
+					mu.Unlock()
+
+					// Launch goroutine to wait for receipt (non-blocking)
+					wg.Add(1)
+					go func(txHash string, txID int64, nonce uint64, startTime time.Time, walletNum int) {
+						defer wg.Done()
+
+						receipt, receiptErr := txSender.WaitForReceipt(ctx, common.HexToHash(txHash), 120*time.Second)
+
+						// Update database with final status
+						confirmedAt := time.Now()
+						execTime := confirmedAt.Sub(startTime).Seconds() * 1000
+
+						if receiptErr != nil {
+							db.UpdateTransactionStatus(txHash, "failed", nil, execTime, receiptErr.Error())
+							mu.Lock()
+							totalFailed++
+							mu.Unlock()
+							fmt.Printf("  [W%d] Tx (nonce %d): ✗ timeout/error\n", walletNum, nonce)
+						} else {
+							if receipt.Status == 1 {
+								db.UpdateTransactionStatus(txHash, "success", &confirmedAt, execTime, "")
+								mu.Lock()
+								totalSuccessful++
+								mu.Unlock()
+								fmt.Printf("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", walletNum, nonce, execTime/1000)
+							} else {
+								db.UpdateTransactionStatus(txHash, "failed", &confirmedAt, execTime, "transaction reverted")
+								mu.Lock()
+								totalFailed++
+								mu.Unlock()
+								fmt.Printf("  [W%d] Tx (nonce %d): ✗ reverted\n", walletNum, nonce)
+							}
+						}
+					}(result.TxHash, txID, req.Nonce, result.SubmittedAt, idx+1)
+				}
 			}
 
-			totalTransactions++
-		}
-
-		fmt.Printf("  ✓ Sent %d transactions (nonce %d to %d)\n",
-			len(txRequests),
-			txRequests[0].Nonce,
-			txRequests[len(txRequests)-1].Nonce,
-		)
+			fmt.Printf("  [W%d] ✓ Sent %d transactions (nonce %d to %d)\n",
+				idx+1,
+				len(txRequests),
+				txRequests[0].Nonce,
+				txRequests[len(txRequests)-1].Nonce,
+			)
+		}(walletIdx, wallet)
 	}
+
+	// Wait for all receipts
+	fmt.Println("\nWaiting for all transactions to be confirmed...")
+	wg.Wait()
+	fmt.Println("✓ All transactions processed")
 
 	totalTime := time.Since(startTime)
 
@@ -254,7 +314,11 @@ func getEnvInt(key string, defaultValue int) int {
 	}
 
 	var intValue int
-	fmt.Sscanf(value, "%d", &intValue)
+	_, err := fmt.Sscanf(value, "%d", &intValue)
+	if err != nil {
+		fmt.Printf("Warning: Invalid integer value for %s: '%s', using default: %d\n", key, value, defaultValue)
+		return defaultValue
+	}
 	return intValue
 }
 
