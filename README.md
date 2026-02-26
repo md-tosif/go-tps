@@ -8,9 +8,12 @@ A Go-based tool for testing Ethereum network transaction throughput. This tool g
 - ✅ Hierarchical Deterministic (HD) wallet support
 - ✅ Precalculated nonce management for batch transactions
 - ✅ Concurrent transaction submission to a single RPC endpoint
+- ✅ Parallel wallet processing with goroutines
+- ✅ Async receipt waiting (non-blocking confirmations)
+- ✅ Loop mode for continuous testing over time
 - ✅ SQLite database for transaction tracking and performance analysis
-- ✅ Detailed execution time metrics
-- ✅ Configurable via environment variables
+- ✅ Detailed execution time metrics and TPS calculations
+- ✅ Configurable via environment variables or .env file
 
 ## Prerequisites
 
@@ -44,6 +47,7 @@ Configure the application using environment variables:
 | `TX_PER_WALLET` | Number of transactions per wallet | `10` |
 | `VALUE_WEI` | Transaction value in wei | `1000000000000000` (0.001 ETH) |
 | `TO_ADDRESS` | Recipient address for all transactions | `0x0000000000000000000000000000000000000001` |
+| `RUN_DURATION_MINUTES` | Duration to run in loop mode (0 = single run) | `0` |
 
 ## Usage
 
@@ -99,6 +103,43 @@ TX_PER_WALLET=5 \
 ./go-tps
 ```
 
+### Loop Mode (Continuous Testing)
+
+By default, the tool runs once and exits. You can enable **Loop Mode** to continuously run the testing process for a specified duration using the `RUN_DURATION_MINUTES` environment variable.
+
+**When to use Loop Mode:**
+- Load testing over extended periods
+- Stress testing RPC endpoints
+- Continuous performance monitoring
+- Long-duration TPS benchmarking
+
+**Example: Run for 5 minutes**
+```bash
+RUN_DURATION_MINUTES=5 \
+RPC_URL="http://localhost:8545" \
+WALLET_COUNT=3 \
+TX_PER_WALLET=10 \
+./go-tps
+```
+
+**Example: Run for 30 minutes with higher load**
+```bash
+RUN_DURATION_MINUTES=30 \
+RPC_URL="http://localhost:8545" \
+WALLET_COUNT=10 \
+TX_PER_WALLET=20 \
+./go-tps
+```
+
+**Loop Mode Behavior:**
+- Runs continuously until the specified time duration elapses
+- Each iteration generates new wallets and transactions
+- All iterations share the same database file (cumulative data)
+- Shows iteration count and remaining time
+- 2-second delay between iterations
+
+**Note:** In loop mode, the mnemonic will be regenerated for each iteration unless you specify `MNEMONIC` environment variable to reuse the same wallets.
+
 ## Output
 
 The tool generates several outputs:
@@ -111,6 +152,7 @@ The tool generates several outputs:
 
 #### Transactions Table
 - `id`: Auto-incrementing primary key
+- `batch_number`: Unique identifier for each execution run
 - `wallet_address`: Sender wallet address
 - `tx_hash`: Transaction hash
 - `nonce`: Transaction nonce
@@ -130,9 +172,51 @@ The tool generates several outputs:
 - `derivation_path`: HD wallet derivation path
 - `created_at`: Creation timestamp
 
+### Batch Tracking
+
+Each execution (single run or loop iteration) is assigned a unique batch number in the format `batch-YYYYMMDD-HHMMSS`. This allows you to:
+
+- Track multiple test runs in the same database
+- Compare performance across different executions
+- Analyze specific test iterations in loop mode
+- Export data for individual test runs
+
+**Example batch numbers:**
+- `batch-20260226-143025` - Single run at 14:30:25 on Feb 26, 2026
+- `batch-20260226-143510` - Loop iteration at 14:35:10
+
+**Query by batch:**
+```bash
+# List all batches
+./analyze.sh batches
+
+# View specific batch statistics
+./analyze.sh batch batch-20260226-143025
+
+# SQL query for specific batch
+sqlite3 transactions.db "SELECT * FROM transactions WHERE batch_number = 'batch-20260226-143025';"
+```
+
 ## Performance Analysis
 
-Query the database for performance metrics:
+The tool includes a comprehensive analysis script with batch support:
+
+```bash
+# View all batches
+./analyze.sh batches
+
+# View specific batch details
+./analyze.sh batch batch-20260226-143025
+
+# Other analysis commands
+./analyze.sh summary       # Overall summary
+./analyze.sh tps          # TPS metrics
+./analyze.sh performance  # Detailed performance
+./analyze.sh wallets      # Per-wallet stats
+./analyze.sh timeline     # Timeline analysis
+```
+
+Query the database directly for custom analysis:
 
 ```bash
 # Install sqlite3 if not already installed

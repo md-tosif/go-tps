@@ -1,6 +1,56 @@
 -- Performance Analysis Queries for go-tps
 
 -- ==============================================
+-- BATCH ANALYSIS
+-- ==============================================
+
+-- List all batches with summary statistics
+SELECT 
+    batch_number,
+    COUNT(*) as total_tx,
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+    ROUND(AVG(execution_time), 2) as avg_execution_ms,
+    MIN(submitted_at) as batch_start,
+    MAX(submitted_at) as batch_end,
+    ROUND((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400, 2) as duration_seconds
+FROM transactions
+GROUP BY batch_number
+ORDER BY batch_number DESC;
+
+-- Get statistics for a specific batch (replace 'BATCH_ID' with actual batch number)
+SELECT 
+    'Batch: ' || batch_number as info,
+    COUNT(*) as total_transactions,
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+    ROUND(AVG(execution_time), 2) as avg_time_ms,
+    MIN(submitted_at) as started,
+    MAX(submitted_at) as completed
+FROM transactions
+WHERE batch_number = 'BATCH_ID'
+GROUP BY batch_number;
+
+-- Compare TPS across different batches
+SELECT 
+    batch_number,
+    COUNT(*) as tx_count,
+    ROUND((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400, 2) as duration_sec,
+    ROUND(CAST(COUNT(*) as REAL) / 
+        ((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400), 2) as tps
+FROM transactions
+GROUP BY batch_number
+HAVING duration_sec > 0
+ORDER BY tps DESC;
+
+-- Get most recent batch
+SELECT batch_number
+FROM transactions
+ORDER BY id DESC
+LIMIT 1;
+
+-- ==============================================
 -- BASIC STATISTICS
 -- ==============================================
 

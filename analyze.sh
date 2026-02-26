@@ -22,6 +22,8 @@ Commands:
     tps             Show TPS (Transactions Per Second) metrics
     performance     Show detailed performance metrics
     wallets         Show per-wallet statistics
+    batches         List all batches and show batch statistics
+    batch <id>      Show statistics for a specific batch
     recent          Show recent transactions
     errors          Show error analysis
     timeline        Show transactions over time
@@ -34,6 +36,8 @@ Examples:
     $0 tps
     $0 performance
     $0 wallets
+    $0 batches
+    $0 batch batch-20260226-143025
     
 Environment Variables:
     DB_PATH         Path to database file (default: ./transactions.db)
@@ -280,6 +284,123 @@ LIMIT 10;
 EOF
 }
 
+batches() {
+    echo "=== ALL BATCHES ==="
+    sqlite3 "$DB_PATH" -header -column <<EOF
+SELECT 
+    batch_number,
+    COUNT(*) as total_tx,
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+    ROUND(AVG(execution_time), 2) as avg_ms,
+    MIN(submitted_at) as started,
+    MAX(submitted_at) as completed
+FROM transactions
+GROUP BY batch_number
+ORDER BY batch_number DESC;
+EOF
+}
+
+batch_stats() {
+    BATCH_ID="$1"
+    
+    if [ -z "$BATCH_ID" ]; then
+        echo "Error: Please specify a batch ID"
+        echo "Usage: $0 batch <batch_id>"
+        echo ""
+        echo "Available batches:"
+        sqlite3 "$DB_PATH" "SELECT DISTINCT batch_number FROM transactions ORDER BY batch_number DESC;"
+        exit 1
+    fi
+    
+    # Check if batch exists
+    COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM transactions WHERE batch_number = '$BATCH_ID';")
+    if [ "$COUNT" -eq 0 ]; then
+        echo "Error: Batch '$BATCH_ID' not found"
+        echo ""
+        echo "Available batches:"
+        sqlite3 "$DB_PATH" "SELECT DISTINCT batch_number FROM transactions ORDER BY batch_number DESC;"
+        exit 1
+    fi
+    
+    echo "=== BATCH: $BATCH_ID ==="
+    echo ""
+    
+    echo "--- Summary ---"
+    sqlite3 "$DB_PATH" <<EOF
+SELECT 
+    'Total Transactions: ' || COUNT(*)
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+UNION ALL
+SELECT 
+    'Successful: ' || SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+UNION ALL
+SELECT 
+    'Failed: ' || SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+UNION ALL
+SELECT 
+    'Pending: ' || SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END)
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+UNION ALL
+SELECT 
+    'Avg Execution Time: ' || ROUND(AVG(execution_time), 2) || ' ms'
+FROM transactions
+WHERE batch_number = '$BATCH_ID' AND execution_time > 0;
+EOF
+
+    echo ""
+    echo "--- Time Range ---"
+    sqlite3 "$DB_PATH" <<EOF
+SELECT 
+    'Started: ' || MIN(submitted_at)
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+UNION ALL
+SELECT 
+    'Completed: ' || MAX(submitted_at)
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+UNION ALL
+SELECT 
+    'Duration: ' || ROUND((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400, 2) || ' seconds'
+FROM transactions
+WHERE batch_number = '$BATCH_ID';
+EOF
+
+    echo ""
+    echo "--- TPS for this Batch ---"
+    sqlite3 "$DB_PATH" <<EOF
+SELECT 
+    'TPS: ' || ROUND(CAST(COUNT(*) as REAL) / 
+        ((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400), 2) || ' tx/s'
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+    AND (JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400 > 0;
+EOF
+
+    echo ""
+    echo "--- Wallet Statistics for this Batch ---"
+    sqlite3 "$DB_PATH" -header -column <<EOF
+SELECT 
+    SUBSTR(wallet_address, 1, 10) || '...' as wallet,
+    COUNT(*) as total,
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+    ROUND(AVG(execution_time), 2) as avg_ms
+FROM transactions
+WHERE batch_number = '$BATCH_ID'
+GROUP BY wallet_address
+ORDER BY total DESC;
+EOF
+}
+
 interactive() {
     echo "Opening interactive SQL shell..."
     echo "Database: $DB_PATH"
@@ -301,6 +422,12 @@ case "${1:-help}" in
         ;;
     wallets)
         wallets
+        ;;
+    batches)
+        batches
+        ;;
+    batch)
+        batch_stats "$2"
         ;;
     recent)
         recent

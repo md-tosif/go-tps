@@ -14,23 +14,24 @@ import (
 )
 
 const (
-	DefaultRPCURL      = "http://localhost:8545"
-	DefaultDBPath      = "./transactions.db"
-	DefaultWalletCount = 10
-
-	DefaultTxPerWallet = 10
-	DefaultValueWei    = "1000000000000000" // 0.001 ETH
-	DefaultToAddress   = "0x0000000000000000000000000000000000000001"
+	DefaultRPCURL             = "http://localhost:8545"
+	DefaultDBPath             = "./transactions.db"
+	DefaultWalletCount        = 10
+	DefaultTxPerWallet        = 10
+	DefaultValueWei           = "1000000000000000" // 0.001 ETH
+	DefaultToAddress          = "0x0000000000000000000000000000000000000001"
+	DefaultRunDurationMinutes = 0 // 0 = run once, >0 = loop for duration
 )
 
 type Config struct {
-	RPCURL      string
-	DBPath      string
-	Mnemonic    string
-	WalletCount int
-	TxPerWallet int
-	ValueWei    string
-	ToAddress   string
+	RPCURL             string
+	DBPath             string
+	Mnemonic           string
+	WalletCount        int
+	TxPerWallet        int
+	ValueWei           string
+	ToAddress          string
+	RunDurationMinutes int
 }
 
 func main() {
@@ -44,6 +45,58 @@ func main() {
 
 	// Load configuration
 	config := LoadConfig()
+
+	// Check if we should run in loop mode
+	if config.RunDurationMinutes > 0 {
+		fmt.Printf("Running in LOOP MODE for %d minutes\n", config.RunDurationMinutes)
+		fmt.Println()
+		runInLoopMode(config)
+	} else {
+		fmt.Println("Running in SINGLE MODE")
+		fmt.Println()
+		runSingleExecution(config)
+	}
+}
+
+func runInLoopMode(config *Config) {
+	duration := time.Duration(config.RunDurationMinutes) * time.Minute
+	startTime := time.Now()
+	endTime := startTime.Add(duration)
+	iteration := 0
+
+	fmt.Printf("Loop started at: %s\n", startTime.Format("15:04:05"))
+	fmt.Printf("Will run until: %s\n", endTime.Format("15:04:05"))
+	fmt.Println(strings.Repeat("=", 60))
+
+	for time.Now().Before(endTime) {
+		iteration++
+		remainingTime := time.Until(endTime)
+		fmt.Printf("\n\n[ITERATION #%d] Time remaining: %.1f minutes\n", iteration, remainingTime.Minutes())
+		fmt.Println(strings.Repeat("-", 60))
+
+		runSingleExecution(config)
+
+		// Check if we have time for another iteration
+		if time.Now().Before(endTime) {
+			fmt.Println("\n✓ Iteration complete. Starting next iteration...")
+			time.Sleep(2 * time.Second) // Small delay between iterations
+		}
+	}
+
+	totalDuration := time.Since(startTime)
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("=== LOOP MODE COMPLETED ===")
+	fmt.Println()
+	fmt.Printf("Total iterations: %d\n", iteration)
+	fmt.Printf("Total duration: %.2f minutes\n", totalDuration.Minutes())
+	fmt.Println(strings.Repeat("=", 60))
+}
+
+func runSingleExecution(config *Config) {
+	// Generate unique batch number for this execution
+	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
+	fmt.Printf("Batch Number: %s\n\n", batchNumber)
 
 	// Initialize database
 	fmt.Println("Initializing database...")
@@ -163,6 +216,7 @@ func main() {
 
 				// Create database transaction record
 				dbTx := &Transaction{
+					BatchNumber:   batchNumber,
 					WalletAddress: w.Address.Hex(),
 					Nonce:         req.Nonce,
 					ToAddress:     toAddress.Hex(),
@@ -255,6 +309,7 @@ func main() {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println("=== Execution Summary ===")
 	fmt.Println()
+	fmt.Printf("Batch Number: %s\n", batchNumber)
 	fmt.Printf("Total transactions submitted: %d\n", totalTransactions)
 	fmt.Printf("Successful: %d\n", totalSuccessful)
 	fmt.Printf("Failed: %d\n", totalFailed)
@@ -287,13 +342,14 @@ func main() {
 func LoadConfig() *Config {
 	// Load from environment variables or use defaults
 	config := &Config{
-		RPCURL:      getEnv("RPC_URL", DefaultRPCURL),
-		DBPath:      getEnv("DB_PATH", DefaultDBPath),
-		Mnemonic:    getEnv("MNEMONIC", ""),
-		WalletCount: getEnvInt("WALLET_COUNT", DefaultWalletCount),
-		TxPerWallet: getEnvInt("TX_PER_WALLET", DefaultTxPerWallet),
-		ValueWei:    getEnv("VALUE_WEI", DefaultValueWei),
-		ToAddress:   getEnv("TO_ADDRESS", DefaultToAddress),
+		RPCURL:             getEnv("RPC_URL", DefaultRPCURL),
+		DBPath:             getEnv("DB_PATH", DefaultDBPath),
+		Mnemonic:           getEnv("MNEMONIC", ""),
+		WalletCount:        getEnvInt("WALLET_COUNT", DefaultWalletCount),
+		TxPerWallet:        getEnvInt("TX_PER_WALLET", DefaultTxPerWallet),
+		ValueWei:           getEnv("VALUE_WEI", DefaultValueWei),
+		ToAddress:          getEnv("TO_ADDRESS", DefaultToAddress),
+		RunDurationMinutes: getEnvInt("RUN_DURATION_MINUTES", DefaultRunDurationMinutes),
 	}
 
 	return config
