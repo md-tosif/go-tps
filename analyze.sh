@@ -3,7 +3,7 @@
 # Performance Analysis Script for go-tps
 # This script provides easy access to common database queries
 
-DB_PATH="${DB_PATH:-./transactions1.db}"
+DB_PATH="${DB_PATH:-./transactions2.db}"
 
 if [ ! -f "$DB_PATH" ]; then
     echo "Error: Database file not found at $DB_PATH"
@@ -19,6 +19,7 @@ Usage: $0 [command]
 
 Commands:
     summary         Show overall summary statistics
+    tps             Show TPS (Transactions Per Second) metrics
     performance     Show detailed performance metrics
     wallets         Show per-wallet statistics
     recent          Show recent transactions
@@ -30,6 +31,7 @@ Commands:
 
 Examples:
     $0 summary
+    $0 tps
     $0 performance
     $0 wallets
     
@@ -201,6 +203,83 @@ EOF
     echo "✓ Summary exported to $SUMMARY_FILE"
 }
 
+tps() {
+    echo "=== TPS (Transactions Per Second) METRICS ==="
+    sqlite3 "$DB_PATH" <<EOF
+.mode column
+.headers on
+
+WITH time_range AS (
+    SELECT 
+        MIN(submitted_at) as min_submit,
+        MAX(submitted_at) as max_submit,
+        MIN(confirmed_at) as min_confirm,
+        MAX(confirmed_at) as max_confirm,
+        COUNT(*) as total_tx,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_tx
+    FROM transactions
+)
+SELECT 
+    '=== Submission TPS ===' as metric,
+    '' as value
+UNION ALL
+SELECT 
+    'Total Transactions:',
+    CAST(total_tx as TEXT)
+FROM time_range
+UNION ALL
+SELECT 
+    'Time Window:',
+    ROUND((JULIANDAY(max_submit) - JULIANDAY(min_submit)) * 86400, 2) || ' seconds'
+FROM time_range
+UNION ALL
+SELECT 
+    'TPS (Submission):',
+    CAST(ROUND(CAST(total_tx as REAL) / 
+        ((JULIANDAY(max_submit) - JULIANDAY(min_submit)) * 86400), 2) as TEXT) || ' tx/s'
+FROM time_range
+WHERE (JULIANDAY(max_submit) - JULIANDAY(min_submit)) * 86400 > 0
+UNION ALL
+SELECT '', ''
+UNION ALL
+SELECT 
+    '=== Confirmation TPS ===',
+    ''
+UNION ALL
+SELECT 
+    'Successful Transactions:',
+    CAST(success_tx as TEXT)
+FROM time_range
+UNION ALL
+SELECT 
+    'Time Window:',
+    ROUND((JULIANDAY(max_confirm) - JULIANDAY(min_confirm)) * 86400, 2) || ' seconds'
+FROM time_range
+WHERE max_confirm IS NOT NULL
+UNION ALL
+SELECT 
+    'TPS (Confirmation):',
+    CAST(ROUND(CAST(success_tx as REAL) / 
+        ((JULIANDAY(max_confirm) - JULIANDAY(min_confirm)) * 86400), 2) as TEXT) || ' tx/s'
+FROM time_range
+WHERE max_confirm IS NOT NULL AND (JULIANDAY(max_confirm) - JULIANDAY(min_confirm)) * 86400 > 0;
+EOF
+
+    echo ""
+    echo "=== TPS Over Time (per second) ==="
+    sqlite3 "$DB_PATH" -header -column <<EOF
+SELECT 
+    strftime('%H:%M:%S', submitted_at) as second,
+    COUNT(*) as tx_count,
+    ROUND(AVG(execution_time), 2) as avg_time_ms
+FROM transactions
+WHERE status = 'success'
+GROUP BY strftime('%Y-%m-%d %H:%M:%S', submitted_at)
+ORDER BY second DESC
+LIMIT 10;
+EOF
+}
+
 interactive() {
     echo "Opening interactive SQL shell..."
     echo "Database: $DB_PATH"
@@ -213,6 +292,9 @@ interactive() {
 case "${1:-help}" in
     summary)
         summary
+        ;;
+    tps)
+        tps
         ;;
     performance)
         performance

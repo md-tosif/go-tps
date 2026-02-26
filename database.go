@@ -171,7 +171,77 @@ func (d *Database) GetTransactionStats() (map[string]interface{}, error) {
 	stats["failed"] = failed
 	stats["pending"] = pending
 
+	// Calculate TPS based on submission times
+	tpsData, err := d.CalculateTPS()
+	if err == nil {
+		for key, value := range tpsData {
+			stats[key] = value
+		}
+	}
+
 	return stats, nil
+}
+
+func (d *Database) CalculateTPS() (map[string]interface{}, error) {
+	tpsStats := make(map[string]interface{})
+
+	// Get time range of all transactions
+	var minTime, maxTime sql.NullTime
+	var txCount int
+
+	err := d.db.QueryRow(`
+		SELECT 
+			MIN(submitted_at) as min_time,
+			MAX(submitted_at) as max_time,
+			COUNT(*) as tx_count
+		FROM transactions
+		WHERE status = 'success'
+	`).Scan(&minTime, &maxTime, &txCount)
+
+	if err != nil || !minTime.Valid || !maxTime.Valid || txCount == 0 {
+		tpsStats["tps_submission"] = 0.0
+		tpsStats["tps_confirmation"] = 0.0
+		return tpsStats, nil
+	}
+
+	// Calculate TPS based on submission time window
+	submissionDuration := maxTime.Time.Sub(minTime.Time).Seconds()
+	if submissionDuration > 0 {
+		tpsStats["tps_submission"] = float64(txCount) / submissionDuration
+		tpsStats["submission_duration_seconds"] = submissionDuration
+	} else {
+		tpsStats["tps_submission"] = 0.0
+		tpsStats["submission_duration_seconds"] = 0.0
+	}
+
+	// Calculate TPS based on confirmation time window
+	var minConfirmed, maxConfirmed sql.NullTime
+	var confirmedCount int
+
+	err = d.db.QueryRow(`
+		SELECT 
+			MIN(confirmed_at) as min_confirmed,
+			MAX(confirmed_at) as max_confirmed,
+			COUNT(*) as confirmed_count
+		FROM transactions
+		WHERE status = 'success' AND confirmed_at IS NOT NULL
+	`).Scan(&minConfirmed, &maxConfirmed, &confirmedCount)
+
+	if err == nil && minConfirmed.Valid && maxConfirmed.Valid && confirmedCount > 0 {
+		confirmationDuration := maxConfirmed.Time.Sub(minConfirmed.Time).Seconds()
+		if confirmationDuration > 0 {
+			tpsStats["tps_confirmation"] = float64(confirmedCount) / confirmationDuration
+			tpsStats["confirmation_duration_seconds"] = confirmationDuration
+		} else {
+			tpsStats["tps_confirmation"] = float64(confirmedCount)
+			tpsStats["confirmation_duration_seconds"] = 0.0
+		}
+	} else {
+		tpsStats["tps_confirmation"] = 0.0
+		tpsStats["confirmation_duration_seconds"] = 0.0
+	}
+
+	return tpsStats, nil
 }
 
 func (d *Database) Close() error {

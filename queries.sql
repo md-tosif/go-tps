@@ -20,6 +20,74 @@ GROUP BY status
 ORDER BY count DESC;
 
 -- ==============================================
+-- TPS (TRANSACTIONS PER SECOND) METRICS
+-- ==============================================
+
+-- Overall TPS based on submission time
+SELECT 
+    COUNT(*) as total_transactions,
+    MIN(submitted_at) as first_tx_time,
+    MAX(submitted_at) as last_tx_time,
+    ROUND((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400, 2) as duration_seconds,
+    ROUND(CAST(COUNT(*) as REAL) / ((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400), 2) as tps_submission
+FROM transactions
+WHERE (JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400 > 0;
+
+-- Overall TPS based on confirmation time
+SELECT 
+    COUNT(*) as successful_transactions,
+    MIN(confirmed_at) as first_confirm_time,
+    MAX(confirmed_at) as last_confirm_time,
+    ROUND((JULIANDAY(MAX(confirmed_at)) - JULIANDAY(MIN(confirmed_at))) * 86400, 2) as duration_seconds,
+    ROUND(CAST(COUNT(*) as REAL) / ((JULIANDAY(MAX(confirmed_at)) - JULIANDAY(MIN(confirmed_at))) * 86400), 2) as tps_confirmation
+FROM transactions
+WHERE status = 'success' 
+    AND confirmed_at IS NOT NULL
+    AND (JULIANDAY(MAX(confirmed_at)) - JULIANDAY(MIN(confirmed_at))) * 86400 > 0;
+
+-- TPS per wallet
+SELECT 
+    wallet_address,
+    COUNT(*) as tx_count,
+    MIN(submitted_at) as first_tx,
+    MAX(submitted_at) as last_tx,
+    ROUND((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400, 2) as duration_seconds,
+    ROUND(CAST(COUNT(*) as REAL) / 
+        NULLIF((JULIANDAY(MAX(submitted_at)) - JULIANDAY(MIN(submitted_at))) * 86400, 0), 2) as tps
+FROM transactions
+GROUP BY wallet_address
+ORDER BY tps DESC;
+
+-- TPS over time (per second intervals)
+SELECT 
+    strftime('%Y-%m-%d %H:%M:%S', submitted_at) as time_second,
+    COUNT(*) as tx_in_second,
+    COUNT(*) as instantaneous_tps
+FROM transactions
+GROUP BY strftime('%Y-%m-%d %H:%M:%S', submitted_at)
+ORDER BY time_second;
+
+-- TPS over time (5-second intervals)
+SELECT 
+    strftime('%Y-%m-%d %H:%M', submitted_at) || ':' || 
+        CAST((CAST(strftime('%S', submitted_at) as INTEGER) / 5) * 5 as TEXT) as time_5sec,
+    COUNT(*) as tx_count,
+    ROUND(CAST(COUNT(*) as REAL) / 5.0, 2) as avg_tps
+FROM transactions
+GROUP BY time_5sec
+ORDER BY time_5sec;
+
+-- Peak TPS (highest transactions per second)
+SELECT 
+    strftime('%Y-%m-%d %H:%M:%S', submitted_at) as peak_second,
+    COUNT(*) as tx_count,
+    'Peak TPS' as metric
+FROM transactions
+GROUP BY strftime('%Y-%m-%d %H:%M:%S', submitted_at)
+ORDER BY tx_count DESC
+LIMIT 1;
+
+-- ==============================================
 -- PERFORMANCE METRICS
 -- ==============================================
 
