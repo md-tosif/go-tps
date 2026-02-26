@@ -164,7 +164,7 @@ func (ts *TransactionSender) Close() {
 	ts.client.Close()
 }
 
-// WaitForReceipt waits for a transaction to be mined and returns the receipt
+// WaitForReceipt waits for a transaction to be mined and returns the receipt using RPC polling
 func (ts *TransactionSender) WaitForReceipt(ctx context.Context, txHash common.Hash, timeout time.Duration) (*types.Receipt, error) {
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -188,6 +188,48 @@ func (ts *TransactionSender) WaitForReceipt(ctx context.Context, txHash common.H
 				// Continue polling for "not found" errors
 				continue
 			}
+		}
+	}
+}
+
+// WaitForReceiptWithSharedWebSocket uses a shared WebSocket client for receipt confirmation, falls back to RPC polling
+// This avoids creating multiple WebSocket connections
+func (ts *TransactionSender) WaitForReceiptWithSharedWebSocket(ctx context.Context, wsClient *ethclient.Client, txHash common.Hash, timeout time.Duration) (*types.Receipt, error) {
+	// If WebSocket client is not provided, use RPC polling
+	if wsClient == nil {
+		return ts.WaitForReceipt(ctx, txHash, timeout)
+	}
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Subscribe to new block headers using shared WebSocket client
+	headers := make(chan *types.Header)
+	sub, err := wsClient.SubscribeNewHead(ctx, headers)
+	if err != nil {
+		// Subscription failed, fallback to RPC polling
+		return ts.WaitForReceipt(ctx, txHash, timeout)
+	}
+	defer sub.Unsubscribe()
+
+	// Wait for receipt using WebSocket notifications
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout waiting for transaction receipt")
+		case subErr := <-sub.Err():
+			// Subscription error, fallback to RPC polling
+			if subErr != nil {
+				return ts.WaitForReceipt(ctx, txHash, timeout)
+			}
+		case <-headers:
+			// New block received, check for receipt
+			receipt, err := wsClient.TransactionReceipt(ctx, txHash)
+			if err == nil {
+				return receipt, nil
+			}
+			// Transaction not yet mined, continue waiting
 		}
 	}
 }

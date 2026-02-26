@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/joho/godotenv"
 )
 
 const (
 	DefaultRPCURL             = "http://localhost:8545"
+	DefaultWSURL              = "" // Empty = no WebSocket, will use RPC polling
 	DefaultDBPath             = "./transactions.db"
 	DefaultWalletCount        = 10
 	DefaultTxPerWallet        = 10
@@ -26,6 +28,7 @@ const (
 
 type Config struct {
 	RPCURL             string
+	WSURL              string
 	DBPath             string
 	Mnemonic           string
 	WalletCount        int
@@ -66,6 +69,22 @@ func main() {
 	}
 	defer txSender.Close()
 	fmt.Println("✓ Connected to RPC")
+
+	// Connect to WebSocket if URL is provided (for faster receipt confirmations)
+	var wsClient *ethclient.Client
+	if config.WSURL != "" {
+		fmt.Printf("Connecting to WebSocket: %s\n", config.WSURL)
+		wsClient, err = ethclient.Dial(config.WSURL)
+		if err != nil {
+			fmt.Printf("Warning: Could not connect to WebSocket (will use RPC polling): %v\n", err)
+			wsClient = nil
+		} else {
+			defer wsClient.Close()
+			fmt.Println("✓ Connected to WebSocket")
+		}
+	} else {
+		fmt.Println("No WebSocket URL provided, will use RPC polling for receipts")
+	}
 
 	// Get or generate mnemonic
 	var mnemonic string
@@ -166,7 +185,7 @@ func main() {
 	if config.RunDurationMinutes > 0 {
 		fmt.Printf("Running in LOOP MODE for %d minutes\n", config.RunDurationMinutes)
 		fmt.Println()
-		runInLoopMode(config, db, txSender, wallets)
+		runInLoopMode(config, db, txSender, wsClient, wallets)
 	} else {
 		fmt.Println("Running in SINGLE MODE")
 		fmt.Println()
@@ -174,7 +193,7 @@ func main() {
 		// Record start time for single execution
 		executionStart := time.Now()
 
-		runSingleExecution(config, db, txSender, wallets)
+		runSingleExecution(config, db, txSender, wsClient, wallets)
 
 		// Calculate elapsed time and ensure minimum 1 second
 		executionElapsed := time.Since(executionStart)
@@ -190,6 +209,10 @@ func main() {
 		}
 	}
 
+	// sleep for 10 seconds before creating summary to allow any pending receipt confirmations to finish
+	fmt.Println("\nWaiting a few seconds for any pending receipt confirmations to finish...")
+	time.Sleep(10 * time.Second)
+
 	// Final summary
 	fmt.Println()
 	fmt.Println(strings.Repeat("=", 60))
@@ -199,7 +222,7 @@ func main() {
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wallets []*Wallet) {
+func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wsClient *ethclient.Client, wallets []*Wallet) {
 	duration := time.Duration(config.RunDurationMinutes) * time.Minute
 	startTime := time.Now()
 	endTime := startTime.Add(duration)
@@ -218,7 +241,7 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wa
 		// Record start time for this iteration
 		iterationStart := time.Now()
 
-		runSingleExecution(config, db, txSender, wallets)
+		runSingleExecution(config, db, txSender, wsClient, wallets)
 
 		// Calculate elapsed time and ensure minimum 1 second per iteration
 		iterationElapsed := time.Since(iterationStart)
@@ -244,7 +267,7 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wa
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wallets []*Wallet) {
+func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wsClient *ethclient.Client, wallets []*Wallet) {
 	// Generate unique batch number for this execution
 	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
 	fmt.Printf("Batch Number: %s\n\n", batchNumber)
@@ -345,7 +368,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					mu.Unlock()
 
 					// Launch independent goroutine to wait for receipt (completely parallel, non-blocking)
-					go waitForReceiptInBackground(config.DBPath, config.RPCURL, result.TxHash, req.Nonce, result.SubmittedAt, idx+1)
+					go waitForReceiptInBackground(config.DBPath, config.RPCURL, wsClient, result.TxHash, req.Nonce, result.SubmittedAt, idx+1)
 				}
 			}
 
@@ -417,7 +440,8 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 
 // waitForReceiptInBackground waits for a transaction receipt in a completely independent goroutine
 // It creates its own database and RPC connections to avoid lifecycle issues
-func waitForReceiptInBackground(dbPath, rpcURL, txHash string, nonce uint64, startTime time.Time, walletNum int) {
+// Uses shared WebSocket client if available, otherwise falls back to RPC polling
+func waitForReceiptInBackground(dbPath, rpcURL string, wsClient *ethclient.Client, txHash string, nonce uint64, startTime time.Time, walletNum int) {
 	// Create independent database connection for this goroutine
 	db, err := NewDatabase(dbPath)
 	if err != nil {
@@ -426,7 +450,7 @@ func waitForReceiptInBackground(dbPath, rpcURL, txHash string, nonce uint64, sta
 	}
 	defer db.Close()
 
-	// Create independent RPC connection
+	// Create independent RPC connection for fallback
 	txSender, err := NewTransactionSender(rpcURL)
 	if err != nil {
 		fmt.Printf("  [W%d] Warning: Could not connect to RPC for receipt confirmation: %v\n", walletNum, err)
@@ -434,9 +458,9 @@ func waitForReceiptInBackground(dbPath, rpcURL, txHash string, nonce uint64, sta
 	}
 	defer txSender.Close()
 
-	// Wait for receipt with timeout
+	// Wait for receipt with timeout - use shared WebSocket if available
 	ctx := context.Background()
-	receipt, receiptErr := txSender.WaitForReceipt(ctx, common.HexToHash(txHash), 120*time.Second)
+	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, wsClient, common.HexToHash(txHash), 120*time.Second)
 
 	// Update database with final status
 	confirmedAt := time.Now()
@@ -460,6 +484,7 @@ func LoadConfig() *Config {
 	// Load from environment variables or use defaults
 	config := &Config{
 		RPCURL:             getEnv("RPC_URL", DefaultRPCURL),
+		WSURL:              getEnv("WS_URL", DefaultWSURL),
 		DBPath:             getEnv("DB_PATH", DefaultDBPath),
 		Mnemonic:           getEnv("MNEMONIC", ""),
 		WalletCount:        getEnvInt("WALLET_COUNT", DefaultWalletCount),
