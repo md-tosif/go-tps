@@ -358,46 +358,61 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		}(walletIdx, wallet)
 	}
 
-	// Wait only for transaction submissions (not confirmations)
-	fmt.Println("\nWaiting for all transactions to be submitted...")
-	wgSubmit.Wait()
-	fmt.Println("✓ All transactions submitted")
-	fmt.Println("Note: Receipt confirmations are happening in background")
+	// Launch background goroutine to wait for submissions and print summary (non-blocking)
+	go func() {
+		fmt.Println("\nWaiting for all transactions to be submitted...")
+		wgSubmit.Wait()
+		fmt.Println("✓ All transactions submitted")
+		fmt.Println("Note: Receipt confirmations are happening in background")
 
-	totalTime := time.Since(startTime)
+		totalTime := time.Since(startTime)
 
-	fmt.Println()
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println("=== Execution Summary ===")
-	fmt.Println()
-	fmt.Printf("Batch Number: %s\n", batchNumber)
-	fmt.Printf("Total transactions submitted: %d\n", totalTransactions)
-	fmt.Printf("Successful: %d\n", totalSuccessful)
-	fmt.Printf("Failed: %d\n", totalFailed)
-	fmt.Printf("Total execution time: %.2f seconds\n", totalTime.Seconds())
-	fmt.Printf("Average time per transaction: %.2f ms\n",
-		totalTime.Seconds()*1000/float64(totalTransactions))
-	fmt.Printf("Transactions per second: %.2f\n",
-		float64(totalTransactions)/totalTime.Seconds())
-	fmt.Println()
-
-	// Get database statistics
-	stats, err := db.GetTransactionStats()
-	if err != nil {
-		fmt.Printf("Warning: Could not get database stats: %v\n", err)
-	} else {
-		fmt.Println("=== Database Statistics ===")
 		fmt.Println()
-		for key, value := range stats {
-			fmt.Printf("%s: %v\n", key, value)
-		}
-	}
+		fmt.Println(strings.Repeat("=", 60))
+		fmt.Println("=== Execution Summary ===")
+		fmt.Println()
+		fmt.Printf("Batch Number: %s\n", batchNumber)
 
-	fmt.Println()
-	fmt.Printf("✓ All data saved to database: %s\n", config.DBPath)
-	fmt.Println()
-	fmt.Println("Done!")
-	fmt.Println("(Receipt confirmations continue in background)")
+		// Lock to safely read counters
+		mu.Lock()
+		submitted := totalTransactions
+		failed := totalFailed
+		successful := totalSuccessful
+		mu.Unlock()
+
+		fmt.Printf("Total transactions submitted: %d\n", submitted)
+		fmt.Printf("Successful: %d\n", successful)
+		fmt.Printf("Failed: %d\n", failed)
+		fmt.Printf("Total execution time: %.2f seconds\n", totalTime.Seconds())
+		if submitted > 0 {
+			fmt.Printf("Average time per transaction: %.2f ms\n",
+				totalTime.Seconds()*1000/float64(submitted))
+			fmt.Printf("Transactions per second: %.2f\n",
+				float64(submitted)/totalTime.Seconds())
+		}
+		fmt.Println()
+
+		// Get database statistics
+		stats, err := db.GetTransactionStats()
+		if err != nil {
+			fmt.Printf("Warning: Could not get database stats: %v\n", err)
+		} else {
+			fmt.Println("=== Database Statistics ===")
+			fmt.Println()
+			for key, value := range stats {
+				fmt.Printf("%s: %v\n", key, value)
+			}
+		}
+
+		fmt.Println()
+		fmt.Printf("✓ All data saved to database: %s\n", config.DBPath)
+		fmt.Println()
+		fmt.Println("Done!")
+		fmt.Println("(Receipt confirmations continue in background)")
+	}()
+
+	// Return immediately - submissions and confirmations happen in background
+	fmt.Println("\n✓ Transaction submission launched in background")
 }
 
 // waitForReceiptInBackground waits for a transaction receipt in a completely independent goroutine
