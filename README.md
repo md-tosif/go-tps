@@ -103,6 +103,43 @@ TX_PER_WALLET=5 \
 ./go-tps
 ```
 
+### Wallet Funding Check
+
+Before starting transactions, the tool automatically displays all wallet addresses with their current balances and asks for confirmation.
+
+**Example output:**
+```
+============================================================
+WALLET ADDRESSES AND BALANCES
+============================================================
+
+[1] 0x742d97eE84D7324bf022038B27f97a01000E39F1
+    Balance: 5000000000000000000 wei (5.000000 ETH)
+
+[2] 0x8a5c3bF4f1C80E2D9a4B5e6d7F8c9a1b2e3f4a5b
+    Balance: 0 wei (0.000000 ETH)
+    ⚠️  WARNING: Wallet has ZERO balance!
+
+[3] 0x1f4e2a3b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f
+    Balance: 1000000000000000000 wei (1.000000 ETH)
+
+============================================================
+⚠️  WARNING: Some wallets have zero balance or errors!
+
+Do you want to proceed with sending transactions? (y/n):
+```
+
+**Features:**
+- Shows wallet addresses with balances in both wei and ETH
+- Warns if any wallet has zero balance
+- Requires user confirmation (y/yes) before proceeding
+- Press 'n' or any other key to cancel and exit
+
+**Tips:**
+- Fund all wallets before running the tool
+- Ensure sufficient gas fees for transactions
+- Use test networks for initial testing
+
 ### Loop Mode (Continuous Testing)
 
 By default, the tool runs once and exits. You can enable **Loop Mode** to continuously run the testing process for a specified duration using the `RUN_DURATION_MINUTES` environment variable.

@@ -67,6 +67,14 @@ func (ts *TransactionSender) GetGasPrice(ctx context.Context) (*big.Int, error) 
 	return gasPrice, nil
 }
 
+func (ts *TransactionSender) GetBalance(ctx context.Context, address common.Address) (*big.Int, error) {
+	balance, err := ts.client.BalanceAt(ctx, address, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get balance: %w", err)
+	}
+	return balance, nil
+}
+
 func (ts *TransactionSender) CreateTransaction(req *TxRequest) (*types.Transaction, error) {
 	tx := types.NewTransaction(
 		req.Nonce,

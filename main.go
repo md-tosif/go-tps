@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"math/big"
@@ -45,58 +46,6 @@ func main() {
 
 	// Load configuration
 	config := LoadConfig()
-
-	// Check if we should run in loop mode
-	if config.RunDurationMinutes > 0 {
-		fmt.Printf("Running in LOOP MODE for %d minutes\n", config.RunDurationMinutes)
-		fmt.Println()
-		runInLoopMode(config)
-	} else {
-		fmt.Println("Running in SINGLE MODE")
-		fmt.Println()
-		runSingleExecution(config)
-	}
-}
-
-func runInLoopMode(config *Config) {
-	duration := time.Duration(config.RunDurationMinutes) * time.Minute
-	startTime := time.Now()
-	endTime := startTime.Add(duration)
-	iteration := 0
-
-	fmt.Printf("Loop started at: %s\n", startTime.Format("15:04:05"))
-	fmt.Printf("Will run until: %s\n", endTime.Format("15:04:05"))
-	fmt.Println(strings.Repeat("=", 60))
-
-	for time.Now().Before(endTime) {
-		iteration++
-		remainingTime := time.Until(endTime)
-		fmt.Printf("\n\n[ITERATION #%d] Time remaining: %.1f minutes\n", iteration, remainingTime.Minutes())
-		fmt.Println(strings.Repeat("-", 60))
-
-		runSingleExecution(config)
-
-		// Check if we have time for another iteration
-		if time.Now().Before(endTime) {
-			fmt.Println("\n✓ Iteration complete. Starting next iteration...")
-			time.Sleep(2 * time.Second) // Small delay between iterations
-		}
-	}
-
-	totalDuration := time.Since(startTime)
-	fmt.Println()
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Printf("=== LOOP MODE COMPLETED ===")
-	fmt.Println()
-	fmt.Printf("Total iterations: %d\n", iteration)
-	fmt.Printf("Total duration: %.2f minutes\n", totalDuration.Minutes())
-	fmt.Println(strings.Repeat("=", 60))
-}
-
-func runSingleExecution(config *Config) {
-	// Generate unique batch number for this execution
-	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
-	fmt.Printf("Batch Number: %s\n\n", batchNumber)
 
 	// Initialize database
 	fmt.Println("Initializing database...")
@@ -160,6 +109,121 @@ func runSingleExecution(config *Config) {
 	}
 	fmt.Println("✓ Wallets saved to database")
 
+	// Display wallet addresses and balances
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("WALLET ADDRESSES AND BALANCES")
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println()
+
+	ctx := context.Background()
+	allFunded := true
+
+	for i, wallet := range wallets {
+		balance, err := txSender.GetBalance(ctx, wallet.Address)
+		if err != nil {
+			fmt.Printf("[%d] %s\n", i+1, wallet.Address.Hex())
+			fmt.Printf("    Balance: ERROR - %v\n", err)
+			allFunded = false
+		} else {
+			// Convert balance to ETH for display
+			balanceFloat := new(big.Float).SetInt(balance)
+			ethValue := new(big.Float).Quo(balanceFloat, big.NewFloat(1e18))
+
+			fmt.Printf("[%d] %s\n", i+1, wallet.Address.Hex())
+			fmt.Printf("    Balance: %s wei (%.6f ETH)\n", balance.String(), ethValue)
+
+			// Check if balance is zero
+			if balance.Cmp(big.NewInt(0)) == 0 {
+				fmt.Printf("    ⚠️  WARNING: Wallet has ZERO balance!\n")
+				allFunded = false
+			}
+		}
+		fmt.Println()
+	}
+
+	fmt.Println(strings.Repeat("=", 60))
+	if !allFunded {
+		fmt.Println("⚠️  WARNING: Some wallets have zero balance or errors!")
+	}
+	fmt.Println()
+
+	// Ask for user confirmation (only once)
+	fmt.Print("Do you want to proceed with sending transactions? (y/n): ")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+
+	if response != "y" && response != "yes" {
+		fmt.Println("\nOperation cancelled by user.")
+		fmt.Println("Please fund the wallets and try again.")
+		os.Exit(0)
+	}
+
+	fmt.Println("\n✓ User confirmed. Proceeding with transactions...")
+	fmt.Println()
+
+	// Check if we should run in loop mode
+	if config.RunDurationMinutes > 0 {
+		fmt.Printf("Running in LOOP MODE for %d minutes\n", config.RunDurationMinutes)
+		fmt.Println()
+		runInLoopMode(config, db, txSender, wallets)
+	} else {
+		fmt.Println("Running in SINGLE MODE")
+		fmt.Println()
+		runSingleExecution(config, db, txSender, wallets)
+	}
+
+	// Final summary
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println("✓ All executions completed")
+	fmt.Printf("✓ Mnemonic saved to: mnemonic.txt\n")
+	fmt.Printf("✓ Database: %s\n", config.DBPath)
+	fmt.Println(strings.Repeat("=", 60))
+}
+
+func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wallets []*Wallet) {
+	duration := time.Duration(config.RunDurationMinutes) * time.Minute
+	startTime := time.Now()
+	endTime := startTime.Add(duration)
+	iteration := 0
+
+	fmt.Printf("Loop started at: %s\n", startTime.Format("15:04:05"))
+	fmt.Printf("Will run until: %s\n", endTime.Format("15:04:05"))
+	fmt.Println(strings.Repeat("=", 60))
+
+	for time.Now().Before(endTime) {
+		iteration++
+		remainingTime := time.Until(endTime)
+		fmt.Printf("\n\n[ITERATION #%d] Time remaining: %.1f minutes\n", iteration, remainingTime.Minutes())
+		fmt.Println(strings.Repeat("-", 60))
+
+		runSingleExecution(config, db, txSender, wallets)
+
+		// Check if we have time for another iteration
+		if time.Now().Before(endTime) {
+			fmt.Println("\n✓ Iteration complete. Starting next iteration...")
+			time.Sleep(2 * time.Second) // Small delay between iterations
+		}
+	}
+
+	totalDuration := time.Since(startTime)
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("=== LOOP MODE COMPLETED ===")
+	fmt.Println()
+	fmt.Printf("Total iterations: %d\n", iteration)
+	fmt.Printf("Total duration: %.2f minutes\n", totalDuration.Minutes())
+	fmt.Println(strings.Repeat("=", 60))
+}
+
+func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wallets []*Wallet) {
+	// Generate unique batch number for this execution
+	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
+	fmt.Printf("Batch Number: %s\n\n", batchNumber)
+
+	ctx := context.Background()
+
 	// Parse configuration values
 	value := new(big.Int)
 	value.SetString(config.ValueWei, 10)
@@ -174,7 +238,6 @@ func runSingleExecution(config *Config) {
 	fmt.Println()
 
 	// Create and send transactions
-	ctx := context.Background()
 	totalTransactions := 0
 	totalSuccessful := 0
 	totalFailed := 0
@@ -182,16 +245,17 @@ func runSingleExecution(config *Config) {
 
 	// Use mutex for thread-safe counter updates
 	var mu sync.Mutex
-	var wg sync.WaitGroup
+	var wgSubmit sync.WaitGroup // Wait for transaction submissions only
+	// Receipt confirmations happen in background, we don't wait for them
 
 	fmt.Println("Starting transaction submission...")
 	fmt.Println(strings.Repeat("=", 60))
 
 	// Process all wallets in parallel
 	for walletIdx, wallet := range wallets {
-		wg.Add(1)
+		wgSubmit.Add(1)
 		go func(idx int, w *Wallet) {
-			defer wg.Done()
+			defer wgSubmit.Done()
 
 			fmt.Printf("\n[Wallet %d/%d] (%s)\n",
 				idx+1, len(wallets), w.Address.Hex())
@@ -242,7 +306,7 @@ func runSingleExecution(config *Config) {
 					dbTx.Status = "pending"
 
 					// Save initial pending status to database
-					txID, dbErr := db.InsertTransaction(dbTx)
+					_, dbErr := db.InsertTransaction(dbTx)
 					if dbErr != nil {
 						fmt.Printf("  Warning: Could not save transaction to DB: %v\n", dbErr)
 					}
@@ -253,39 +317,8 @@ func runSingleExecution(config *Config) {
 					totalTransactions++
 					mu.Unlock()
 
-					// Launch goroutine to wait for receipt (non-blocking)
-					wg.Add(1)
-					go func(txHash string, txID int64, nonce uint64, startTime time.Time, walletNum int) {
-						defer wg.Done()
-
-						receipt, receiptErr := txSender.WaitForReceipt(ctx, common.HexToHash(txHash), 120*time.Second)
-
-						// Update database with final status
-						confirmedAt := time.Now()
-						execTime := confirmedAt.Sub(startTime).Seconds() * 1000
-
-						if receiptErr != nil {
-							db.UpdateTransactionStatus(txHash, "failed", nil, execTime, receiptErr.Error())
-							mu.Lock()
-							totalFailed++
-							mu.Unlock()
-							fmt.Printf("  [W%d] Tx (nonce %d): ✗ timeout/error\n", walletNum, nonce)
-						} else {
-							if receipt.Status == 1 {
-								db.UpdateTransactionStatus(txHash, "success", &confirmedAt, execTime, "")
-								mu.Lock()
-								totalSuccessful++
-								mu.Unlock()
-								fmt.Printf("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", walletNum, nonce, execTime/1000)
-							} else {
-								db.UpdateTransactionStatus(txHash, "failed", &confirmedAt, execTime, "transaction reverted")
-								mu.Lock()
-								totalFailed++
-								mu.Unlock()
-								fmt.Printf("  [W%d] Tx (nonce %d): ✗ reverted\n", walletNum, nonce)
-							}
-						}
-					}(result.TxHash, txID, req.Nonce, result.SubmittedAt, idx+1)
+					// Launch independent goroutine to wait for receipt (completely parallel, non-blocking)
+					go waitForReceiptInBackground(config.DBPath, config.RPCURL, result.TxHash, req.Nonce, result.SubmittedAt, idx+1)
 				}
 			}
 
@@ -298,10 +331,11 @@ func runSingleExecution(config *Config) {
 		}(walletIdx, wallet)
 	}
 
-	// Wait for all receipts
-	fmt.Println("\nWaiting for all transactions to be confirmed...")
-	wg.Wait()
-	fmt.Println("✓ All transactions processed")
+	// Wait only for transaction submissions (not confirmations)
+	fmt.Println("\nWaiting for all transactions to be submitted...")
+	wgSubmit.Wait()
+	fmt.Println("✓ All transactions submitted")
+	fmt.Println("Note: Receipt confirmations are happening in background")
 
 	totalTime := time.Since(startTime)
 
@@ -334,9 +368,50 @@ func runSingleExecution(config *Config) {
 
 	fmt.Println()
 	fmt.Printf("✓ All data saved to database: %s\n", config.DBPath)
-	fmt.Printf("✓ Mnemonic saved to: mnemonic.txt\n")
 	fmt.Println()
 	fmt.Println("Done!")
+	fmt.Println("(Receipt confirmations continue in background)")
+}
+
+// waitForReceiptInBackground waits for a transaction receipt in a completely independent goroutine
+// It creates its own database and RPC connections to avoid lifecycle issues
+func waitForReceiptInBackground(dbPath, rpcURL, txHash string, nonce uint64, startTime time.Time, walletNum int) {
+	// Create independent database connection for this goroutine
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		fmt.Printf("  [W%d] Warning: Could not open DB for receipt confirmation: %v\n", walletNum, err)
+		return
+	}
+	defer db.Close()
+
+	// Create independent RPC connection
+	txSender, err := NewTransactionSender(rpcURL)
+	if err != nil {
+		fmt.Printf("  [W%d] Warning: Could not connect to RPC for receipt confirmation: %v\n", walletNum, err)
+		return
+	}
+	defer txSender.Close()
+
+	// Wait for receipt with timeout
+	ctx := context.Background()
+	receipt, receiptErr := txSender.WaitForReceipt(ctx, common.HexToHash(txHash), 120*time.Second)
+
+	// Update database with final status
+	confirmedAt := time.Now()
+	execTime := confirmedAt.Sub(startTime).Seconds() * 1000
+
+	if receiptErr != nil {
+		db.UpdateTransactionStatus(txHash, "failed", nil, execTime, receiptErr.Error())
+		fmt.Printf("  [W%d] Tx (nonce %d): ✗ timeout/error\n", walletNum, nonce)
+	} else {
+		if receipt.Status == 1 {
+			db.UpdateTransactionStatus(txHash, "success", &confirmedAt, execTime, "")
+			fmt.Printf("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", walletNum, nonce, execTime/1000)
+		} else {
+			db.UpdateTransactionStatus(txHash, "failed", &confirmedAt, execTime, "transaction reverted")
+			fmt.Printf("  [W%d] Tx (nonce %d): ✗ reverted\n", walletNum, nonce)
+		}
+	}
 }
 
 func LoadConfig() *Config {
