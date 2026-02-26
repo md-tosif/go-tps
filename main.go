@@ -211,7 +211,7 @@ func main() {
 
 	// sleep for 10 seconds before creating summary to allow any pending receipt confirmations to finish
 	fmt.Println("\nWaiting a few seconds for any pending receipt confirmations to finish...")
-	time.Sleep(10 * time.Second)
+	time.Sleep(60 * time.Second)
 
 	// Final summary
 	fmt.Println()
