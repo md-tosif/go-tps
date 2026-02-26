@@ -1,0 +1,52 @@
+# Binaries
+go-tps
+go-tps-linux
+go-tps-macos
+go-tps.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Database files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Sensitive data
+mnemonic.txt
+mnemonics.txt
+wallets.txt
+*.key
+*.pem
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Dependency directories
+vendor/
