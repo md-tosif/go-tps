@@ -170,7 +170,24 @@ func main() {
 	} else {
 		fmt.Println("Running in SINGLE MODE")
 		fmt.Println()
+
+		// Record start time for single execution
+		executionStart := time.Now()
+
 		runSingleExecution(config, db, txSender, wallets)
+
+		// Calculate elapsed time and ensure minimum 1 second
+		executionElapsed := time.Since(executionStart)
+		minDuration := 1 * time.Second
+
+		if executionElapsed < minDuration {
+			remainingSleep := minDuration - executionElapsed
+			fmt.Printf("\n⏱  Execution completed in %.3f seconds. Waiting %.3f seconds to maintain 1-second minimum...\n",
+				executionElapsed.Seconds(), remainingSleep.Seconds())
+			time.Sleep(remainingSleep)
+		} else {
+			fmt.Printf("\n⏱  Execution completed in %.3f seconds\n", executionElapsed.Seconds())
+		}
 	}
 
 	// Final summary
@@ -198,12 +215,22 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wa
 		fmt.Printf("\n\n[ITERATION #%d] Time remaining: %.1f minutes\n", iteration, remainingTime.Minutes())
 		fmt.Println(strings.Repeat("-", 60))
 
+		// Record start time for this iteration
+		iterationStart := time.Now()
+
 		runSingleExecution(config, db, txSender, wallets)
 
-		// Check if we have time for another iteration
-		if time.Now().Before(endTime) {
-			fmt.Println("\n✓ Iteration complete. Starting next iteration...")
-			time.Sleep(2 * time.Second) // Small delay between iterations
+		// Calculate elapsed time and ensure minimum 1 second per iteration
+		iterationElapsed := time.Since(iterationStart)
+		minDuration := 1 * time.Second
+
+		if iterationElapsed < minDuration {
+			remainingSleep := minDuration - iterationElapsed
+			fmt.Printf("\n⏱  Iteration completed in %.3f seconds. Waiting %.3f seconds to maintain 1-second minimum...\n",
+				iterationElapsed.Seconds(), remainingSleep.Seconds())
+			time.Sleep(remainingSleep)
+		} else {
+			fmt.Printf("\n⏱  Iteration completed in %.3f seconds\n", iterationElapsed.Seconds())
 		}
 	}
 
