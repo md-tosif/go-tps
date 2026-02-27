@@ -1,0 +1,2 @@
+# Python dependencies for go-tps analysis tools
+matplotlib>=3.5.0

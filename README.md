@@ -9,7 +9,8 @@ A Go-based tool for testing Ethereum network transaction throughput. This tool g
 - **[BATCH_TRACKING.md](BATCH_TRACKING.md)** - Guide to batch tracking feature
 - **[claude.md](claude.md)** - Comprehensive technical documentation for AI assistants
 - **[queries.sql](queries.sql)** - Pre-written SQL queries for analysis
-- **[analyze.sh](analyze.sh)** - Shell script for easy database analysis
+- **[scripts/analyze.sh](scripts/analyze.sh)** - Shell script for easy database analysis
+- **[scripts/graph_metrics.py](scripts/graph_metrics.py)** - Unified TPS and latency visualization tool
 
 ## 📑 Table of Contents
 
@@ -332,17 +333,93 @@ The tool includes a comprehensive analysis script with batch support:
 
 ```bash
 # View all batches
-./analyze.sh batches
+./scripts/analyze.sh batches
 
 # View specific batch details
-./analyze.sh batch batch-20260226-143025
+./scripts/analyze.sh batch batch-20260226-143025
 
 # Other analysis commands
-./analyze.sh summary       # Overall summary
-./analyze.sh tps          # TPS metrics
-./analyze.sh performance  # Detailed performance
-./analyze.sh wallets      # Per-wallet stats
-./analyze.sh timeline     # Timeline analysis
+./scripts/analyze.sh summary       # Overall summary
+./scripts/analyze.sh tps          # TPS metrics
+./scripts/analyze.sh performance  # Detailed performance
+./scripts/analyze.sh wallets      # Per-wallet stats
+./scripts/analyze.sh timeline     # Timeline analysis
+```
+
+### Performance Graphs
+
+Visualize transaction performance metrics with the unified graphing tool:
+
+**Installation:**
+```bash
+# Install Python dependencies
+pip3 install -r requirements.txt
+```
+
+**Quick Start:**
+```bash
+# Generate both TPS and Latency graphs
+./graph.py
+
+# Or use the full path
+./scripts/graph_metrics.py
+```
+
+**Available Graph Types:**
+
+1. **TPS Graph** - Transactions Per Second
+   - Shows throughput over time
+   - Blue line: Submission TPS (sent to RPC)
+   - Green line: Confirmation TPS (mined in blocks)
+   - Displays avg/max statistics
+
+2. **Latency Graph** - Transaction Timing
+   - Shows latency in milliseconds over time
+   - Orange line: Submission Latency (time to send)
+   - Purple line: Confirmation Latency (time to mine)
+   - Displays avg/min/max statistics
+
+**Features:**
+- Groups data into 5-second intervals for clear visualization
+- Interactive batch selection (recent or historical)
+- Choose specific graph type or generate both
+- All graphs saved in `images/` folder
+- High-quality PNG output (300 DPI)
+
+**Example Usage:**
+```bash
+$ ./graph.py
+=== Transaction Metrics Graph Generator ===
+
+Available batches:
+  0. All batches (combined)
+  1. batch-20260226-143025
+  2. batch-20260226-142510
+
+Select batch number (0 for all, or press Enter for most recent): 1
+
+Selected batch: batch-20260226-143025
+
+Select graph type:
+  1. TPS Graph (Transactions Per Second)
+  2. Latency Graph (Transaction Timing)
+  3. Both Graphs
+
+Enter choice (1-3, or press Enter for both): 
+
+Generating both graphs...
+
+--- TPS Graph ---
+Calculating TPS intervals...
+Generating graph...
+✓ TPS graph saved to: images/tps_graph_batch-20260226-143025.png
+
+--- Latency Graph ---
+Calculating latency intervals...
+Generating graph...
+✓ Latency graph saved to: images/latency_graph_batch-20260226-143025.png
+
+Done! All graphs saved in the 'images/' directory.
 ```
 
 Query the database directly for custom analysis:
@@ -366,15 +443,32 @@ sqlite> SELECT wallet_address, COUNT(*) as tx_count FROM transactions GROUP BY w
 
 ```
 go-tps/
-├── main.go           # Main application entry point
-├── wallet.go         # Wallet generation and mnemonic handling
-├── transaction.go    # Transaction creation and sending
-├── database.go       # SQLite database operations
-├── go.mod            # Go module dependencies
-├── go.sum            # Dependency checksums
-├── README.md         # This file
-└── .gitignore        # Git ignore rules
+├── main.go              # Main application entry point
+├── wallet.go            # Wallet generation and mnemonic handling
+├── transaction.go       # Transaction creation and sending
+├── database.go          # SQLite database operations
+├── requirements.txt     # Python dependencies for analysis tools
+├── queries.sql          # Pre-written SQL queries
+├── scripts/             # Analysis and visualization tools
+│   ├── README.md        # Scripts documentation
+│   ├── analyze.sh       # Shell script for database analysis
+│   └── graph_metrics.py # Unified TPS & Latency graphing tool
+├── analyze.sh           # Wrapper for scripts/analyze.sh
+├── graph.py             # Wrapper for scripts/graph_metrics.py
+├── images/              # Output folder for all generated graphs
+│   ├── tps_graph_*.png        # TPS graphs
+│   └── latency_graph_*.png    # Latency graphs
+├── go.mod               # Go module dependencies
+├── go.sum               # Dependency checksums
+├── README.md            # This file
+├── QUICKSTART.md        # Quick start guide
+├── PROJECT_STRUCTURE.md # Project structure documentation
+├── BATCH_TRACKING.md    # Batch tracking guide
+├── claude.md            # Technical documentation
+└── .gitignore           # Git ignore rules
 ```
+
+**Note:** All graph output files are saved in the `images/` folder for better organization. Use `./graph.py` for generating TPS and latency graphs.
 
 ## Important Security Notes
 

@@ -48,5 +48,9 @@ go.work
 *.log
 logs/
 
+# Generated graphs
+images/
+*.png
+
 # Dependency directories
 vendor/
