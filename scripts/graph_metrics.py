@@ -2,7 +2,7 @@
 """
 Transaction Metrics Graph Generator
 Generates graphs for TPS (Transactions Per Second) and Latency metrics
-over 5-second intervals from the transactions database.
+over 1-second intervals from the transactions database.
 """
 
 import sqlite3
@@ -17,7 +17,7 @@ from collections import defaultdict
 import statistics
 
 DB_PATH = "./transactions.db"
-INTERVAL_SECONDS = 5
+INTERVAL_SECONDS = 1
 OUTPUT_DIR = "images"
 
 
@@ -38,7 +38,7 @@ def get_batch_list(conn):
 
 def calculate_tps_intervals(conn, batch_number=None):
     """
-    Calculate TPS for both submission and confirmation over 5-second intervals.
+    Calculate TPS for both submission and confirmation over 1-second intervals.
     
     Returns:
         submission_data: dict of {timestamp: tps}
@@ -79,7 +79,7 @@ def calculate_tps_intervals(conn, batch_number=None):
         # Parse submission time
         try:
             submitted_dt = datetime.fromisoformat(submitted_str)
-            # Round down to nearest 5-second interval
+            # Round down to nearest 1-second interval
             interval_start = submitted_dt.replace(microsecond=0)
             interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
             submission_intervals[interval_start] += 1
@@ -90,7 +90,7 @@ def calculate_tps_intervals(conn, batch_number=None):
         if confirmed_str and status == 'success':
             try:
                 confirmed_dt = datetime.fromisoformat(confirmed_str)
-                # Round down to nearest 5-second interval
+                # Round down to nearest interval (INTERVAL_SECONDS)
                 interval_start = confirmed_dt.replace(microsecond=0)
                 interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
                 confirmation_intervals[interval_start] += 1
@@ -106,7 +106,7 @@ def calculate_tps_intervals(conn, batch_number=None):
 
 def calculate_latency_intervals(conn, batch_number=None):
     """
-    Calculate average latency for both submission and confirmation over 5-second intervals.
+    Calculate average latency for both submission and confirmation over 1-second intervals.
     
     Submission latency: Time taken to submit the transaction (execution_time in DB)
     Confirmation latency: Time from submission to confirmation
@@ -149,7 +149,7 @@ def calculate_latency_intervals(conn, batch_number=None):
         
         try:
             submitted_dt = datetime.fromisoformat(submitted_str)
-            # Round down to nearest 5-second interval
+            # Round down to nearest interval (INTERVAL_SECONDS)
             interval_start = submitted_dt.replace(microsecond=0)
             interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
             
