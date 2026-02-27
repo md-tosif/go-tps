@@ -477,29 +477,77 @@ wg.Wait()
 
 **Design Decision:** Don't block main program waiting for receipt confirmations
 
-**Implementation:**
+**Worker Pool Pattern (New):**
+```go
+// Create worker pool with N workers
+receiptJobChan := make(chan ReceiptJob, totalTransactions)
+startReceiptWorkerPool(workerCount, receiptJobChan, &wg)
+
+// Submit jobs to workers
+receiptJobChan <- ReceiptJob{
+    DBPath: dbPath,
+    RPCURL: rpcURL,
+    TxHash: txHash,
+    // ... other fields
+}
+
+// Workers process jobs concurrently
+```
+
+**Benefits:**
+- Fixed number of database/RPC connections (one per worker)
+- Better resource management than one goroutine per transaction
+- Controlled concurrency prevents overwhelming the RPC endpoint
+- Workers reuse connections for better performance
+
+**Old Implementation (Deprecated):**
 ```go
 // Background goroutine per transaction
 go waitForReceiptInBackground(dbPath, rpcURL, wsClient, txHash, ...)
 ```
 
-**Why Independent Connections?**
-- Each goroutine needs its own DB connection (SQLite limitation)
-- Each goroutine needs its own RPC client (connection pooling)
-- Shared WebSocket client is thread-safe (reused)
+**Why Worker Pool is Better:**
+- Old: Creates N*M connections (N wallets * M transactions)
+- New: Creates fixed worker connections (configurable, default 10)
+- Old: Can overwhelm system with thousands of goroutines
+- New: Controlled concurrency with job queue
+- Old: Each goroutine creates/closes DB + RPC connections
+- New: Workers reuse connections across multiple jobs
+
+**Worker Pool Components:**
+
+```go
+// Job structure
+type ReceiptJob struct {
+    DBPath     string
+    RPCURL     string
+    WSClient   *ethclient.Client
+    TxHash     string
+    Nonce      uint64
+    StartTime  time.Time
+    WalletNum  int
+}
+
+// Worker function
+func receiptWorker(workerID int, jobChan <-chan ReceiptJob, wg *sync.WaitGroup) {
+    // Reuse connections across jobs
+    // Process jobs until channel closes
+}
+```
 
 **Lifecycle:**
 ```
-Main Program                          Background Goroutines
+Main Program                          Worker Pool
      │                                        │
-     ├─ Submit Tx1 ───────────────────────┐  │
-     │                                     └─→ Wait for Tx1 receipt
-     ├─ Submit Tx2 ───────────────────────┐  │
-     │                                     └─→ Wait for Tx2 receipt
-     ├─ Submit Tx3 ───────────────────────┐  │
-     │                                     └─→ Wait for Tx3 receipt
+     ├─ Submit Tx1 ────────────────────┐     │
+     │                                  └────→ Job Queue → Worker 1
+     ├─ Submit Tx2 ────────────────────┐     │             (processes)
+     │                                  └────→ Job Queue → Worker 2
+     ├─ Submit Tx3 ────────────────────┐     │             (processes)
+     │                                  └────→ Job Queue → Worker 3
+     │                                         │             (processes)
      ▼                                        ▼
-Return to user                        Continue running
+Return to user                        Workers continue processing
 (Summary displayed)                   (Update DB when confirmed)
 ```
 
@@ -547,6 +595,33 @@ func WaitForReceiptWithSharedWebSocket(wsClient, txHash) {
 }
 ```
 
+### 6. Serialized Database Writes
+
+**Problem:** SQLite locks prevent concurrent writes from multiple goroutines
+
+**Solution:** Single database writer goroutine with channel
+
+```go
+// Create database writer channel
+dbWriteChan := make(chan *Transaction, totalTransactions)
+
+// Start writer goroutine
+go func() {
+    for tx := range dbWriteChan {
+        db.InsertTransaction(tx)
+    }
+}()
+
+// Wallet goroutines send to channel (non-blocking)
+dbWriteChan <- &Transaction{...}
+```
+
+**Benefits:**
+- Eliminates "database is locked" errors
+- Serializes all initial transaction writes
+- Non-blocking for wallet processing goroutines
+- Receipt workers still use independent connections for updates
+
 ---
 
 ## Configuration
@@ -564,6 +639,7 @@ func WaitForReceiptWithSharedWebSocket(wsClient, txHash) {
 | `VALUE_WEI` | string | `"1000000000000000"` | 0.001 ETH in wei |
 | `TO_ADDRESS` | string | `0x000...001` | Recipient address |
 | `RUN_DURATION_MINUTES` | int | `0` | Loop mode duration (0 = single run) |
+| `RECEIPT_WORKERS` | int | `10` | Number of concurrent workers for receipt confirmation |
 
 ### Example Configurations
 
@@ -857,10 +933,11 @@ require (
    - Receipt polling latency
    - Network round-trip time
 
-2. **Database Writes:** Secondary bottleneck
+2. **Database Writes:** Mitigated bottleneck
    - SQLite is single-writer
-   - Many concurrent goroutines updating database
-   - Mitigated by connection-per-goroutine
+   - Solution: Serialized database writer goroutine
+   - All initial inserts go through single channel
+   - Receipt workers have independent connections
 
 3. **Nonce Management:** Design constraint
    - Must maintain sequential nonces per wallet
@@ -881,9 +958,10 @@ require (
    - Could batch multiple SendTransaction calls
    - Requires JSON-RPC batch support
 
-4. **Connection Pooling:**
-   - Currently creates connection per goroutine
-   - Could use connection pool for database
+4. **Serialized Database Writes:**
+   - Implemented using database writer goroutine
+   - Prevents SQLite "database is locked" errors
+   - All initial transaction inserts go through single channel
 
 ---
 
@@ -947,9 +1025,10 @@ WALLET_COUNT=20 TX_PER_WALLET=20 ./go-tps
 - **Prevention:** Verify endpoint before running
 
 **4. "database is locked"**
-- **Cause:** Multiple processes accessing database
-- **Solution:** Close other connections
-- **Prevention:** Use connection-per-goroutine (already implemented)
+- **Cause:** Multiple processes accessing database OR legacy concurrency issue
+- **Solution:** Fixed in current version with serialized database writer
+- **Old versions:** Close other connections or use one process at a time
+- **Current:** Should not occur - serialized writes prevent locking
 
 **5. "replacement transaction underpriced"**
 - **Cause:** Transaction with same nonce already pending

@@ -84,6 +84,7 @@ Configure the application using environment variables:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `RPC_URL` | Ethereum RPC endpoint URL | `http://localhost:8545` |
+| `WS_URL` | WebSocket URL for faster receipt confirmations (optional) | `` (empty) |
 | `DB_PATH` | SQLite database file path | `./transactions.db` |
 | `MNEMONIC` | BIP39 mnemonic phrase (leave empty to auto-generate) | `` (empty - generates new) |
 | `WALLET_COUNT` | Number of wallets to derive from mnemonic | `10` |
@@ -91,6 +92,7 @@ Configure the application using environment variables:
 | `VALUE_WEI` | Transaction value in wei | `1000000000000000` (0.001 ETH) |
 | `TO_ADDRESS` | Recipient address for all transactions | `0x0000000000000000000000000000000000000001` |
 | `RUN_DURATION_MINUTES` | Duration to run in loop mode (0 = single run) | `0` |
+| `RECEIPT_WORKERS` | Number of concurrent workers for receipt confirmation | `10` |
 
 ## Usage
 
