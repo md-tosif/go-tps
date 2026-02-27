@@ -375,12 +375,12 @@ pip3 install -r requirements.txt
 
 2. **Latency Graph** - Transaction Timing
    - Shows latency in milliseconds over time
-   - Orange line: Submission Latency (time to send)
+   - Orange line: Execution Latency (time to execute RPC call)
    - Purple line: Confirmation Latency (time to mine)
    - Displays avg/min/max statistics
 
 **Features:**
-- Groups data into 5-second intervals for clear visualization
+- Groups data into 1-second intervals for clear visualization
 - Interactive batch selection (recent or historical)
 - Choose specific graph type or generate both
 - All graphs saved in `images/` folder

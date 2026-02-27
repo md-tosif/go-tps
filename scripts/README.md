@@ -33,7 +33,7 @@ This is the main graphing tool that combines TPS and latency analysis in one con
 **Features:**
 - Generate TPS graphs, latency graphs, or both
 - Saves all images to `images/` folder (organized output)
-- Groups data into 5-second intervals
+- Groups data into 1-second intervals
 - Displays comprehensive statistics
 - Interactive batch selection
 - High-quality PNG output (300 DPI)
@@ -51,8 +51,8 @@ This is the main graphing tool that combines TPS and latency analysis in one con
    - Shows avg/max statistics
 
 2. **Latency Graph** (`images/latency_graph_*.png`)
-   - Orange line: Submission Latency (ms)
-   - Purple line: Confirmation Latency (ms)
+   - Orange line: Execution Latency (ms) - time to execute RPC submission
+   - Purple line: Confirmation Latency (ms) - time from submission to confirmation
    - Shows avg/min/max statistics
 
 **Interactive Options:**

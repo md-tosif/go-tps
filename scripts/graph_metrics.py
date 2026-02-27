@@ -106,13 +106,13 @@ def calculate_tps_intervals(conn, batch_number=None):
 
 def calculate_latency_intervals(conn, batch_number=None):
     """
-    Calculate average latency for both submission and confirmation over 1-second intervals.
+    Calculate average latency for both execution and confirmation over 1-second intervals.
     
-    Submission latency: Time taken to submit the transaction (execution_time in DB)
-    Confirmation latency: Time from submission to confirmation
+    Execution latency: Time taken to execute the transaction submission (execution_time in DB)
+    Confirmation latency: Time from submission to confirmation (confirmed_at - submitted_at)
     
     Returns:
-        submission_latency: dict of {timestamp: avg_latency_ms}
+        execution_latency: dict of {timestamp: avg_latency_ms}
         confirmation_latency: dict of {timestamp: avg_latency_ms}
     """
     cursor = conn.cursor()
@@ -141,7 +141,7 @@ def calculate_latency_intervals(conn, batch_number=None):
         return {}, {}
     
     # Group latencies by time intervals
-    submission_intervals = defaultdict(list)
+    execution_intervals = defaultdict(list)
     confirmation_intervals = defaultdict(list)
     
     for row in rows:
@@ -153,9 +153,9 @@ def calculate_latency_intervals(conn, batch_number=None):
             interval_start = submitted_dt.replace(microsecond=0)
             interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
             
-            # Submission latency (from execution_time in DB - time to submit)
+            # Execution latency (from execution_time in DB - time to execute submission)
             if exec_time is not None and exec_time > 0:
-                submission_intervals[interval_start].append(exec_time)
+                execution_intervals[interval_start].append(exec_time)
             
             # Confirmation latency (time from submission to confirmation)
             if confirmed_str and status == 'success':
@@ -170,12 +170,12 @@ def calculate_latency_intervals(conn, batch_number=None):
             continue
     
     # Calculate average latency for each interval
-    submission_avg = {ts: statistics.mean(latencies) if latencies else 0 
-                      for ts, latencies in submission_intervals.items()}
+    execution_avg = {ts: statistics.mean(latencies) if latencies else 0 
+                     for ts, latencies in execution_intervals.items()}
     confirmation_avg = {ts: statistics.mean(latencies) if latencies else 0 
                         for ts, latencies in confirmation_intervals.items()}
     
-    return submission_avg, confirmation_avg
+    return execution_avg, confirmation_avg
 
 
 def plot_tps_graph(submission_tps, confirmation_tps, batch_number=None):
@@ -248,23 +248,23 @@ def plot_tps_graph(submission_tps, confirmation_tps, batch_number=None):
     plt.close()
 
 
-def plot_latency_graph(submission_latency, confirmation_latency, batch_number=None):
+def plot_latency_graph(execution_latency, confirmation_latency, batch_number=None):
     """Create and save the latency graph."""
-    if not submission_latency and not confirmation_latency:
+    if not execution_latency and not confirmation_latency:
         print("No data to plot.")
         return
     
     # Prepare data for plotting
-    all_times = sorted(set(list(submission_latency.keys()) + list(confirmation_latency.keys())))
+    all_times = sorted(set(list(execution_latency.keys()) + list(confirmation_latency.keys())))
     
-    submission_values = [submission_latency.get(t, 0) for t in all_times]
+    execution_values = [execution_latency.get(t, 0) for t in all_times]
     confirmation_values = [confirmation_latency.get(t, 0) for t in all_times]
     
     # Create the plot
     fig, ax = plt.subplots(figsize=(14, 7))
     
     # Plot both lines
-    ax.plot(all_times, submission_values, label='Submission Latency', 
+    ax.plot(all_times, execution_values, label='Execution Latency', 
             color='#FF9800', linewidth=2, marker='o', markersize=4)
     ax.plot(all_times, confirmation_values, label='Confirmation Latency',
             color='#9C27B0', linewidth=2, marker='s', markersize=4)
@@ -291,15 +291,15 @@ def plot_latency_graph(submission_latency, confirmation_latency, batch_number=No
     ax.legend(loc='best', fontsize=11, framealpha=0.9)
     
     # Add statistics text box
-    if submission_values or confirmation_values:
+    if execution_values or confirmation_values:
         stats_lines = []
         
-        if submission_values and any(v > 0 for v in submission_values):
-            sub_values_filtered = [v for v in submission_values if v > 0]
-            sub_avg = statistics.mean(sub_values_filtered)
-            sub_min = min(sub_values_filtered)
-            sub_max = max(sub_values_filtered)
-            stats_lines.append(f'Submission:  Avg: {sub_avg:.2f} ms  |  Min: {sub_min:.2f} ms  |  Max: {sub_max:.2f} ms')
+        if execution_values and any(v > 0 for v in execution_values):
+            exec_values_filtered = [v for v in execution_values if v > 0]
+            exec_avg = statistics.mean(exec_values_filtered)
+            exec_min = min(exec_values_filtered)
+            exec_max = max(exec_values_filtered)
+            stats_lines.append(f'Execution:    Avg: {exec_avg:.2f} ms  |  Min: {exec_min:.2f} ms  |  Max: {exec_max:.2f} ms')
         
         if confirmation_values and any(v > 0 for v in confirmation_values):
             conf_values_filtered = [v for v in confirmation_values if v > 0]
@@ -381,10 +381,10 @@ def generate_latency_graph(conn, batch_number):
     """Generate Latency graph."""
     print("\n--- Latency Graph ---")
     print("Calculating latency intervals...")
-    submission_latency, confirmation_latency = calculate_latency_intervals(conn, batch_number)
+    execution_latency, confirmation_latency = calculate_latency_intervals(conn, batch_number)
     
     print("Generating graph...")
-    plot_latency_graph(submission_latency, confirmation_latency, batch_number)
+    plot_latency_graph(execution_latency, confirmation_latency, batch_number)
 
 
 def main():
