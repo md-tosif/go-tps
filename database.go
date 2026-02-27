@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -27,6 +28,7 @@ type Transaction struct {
 
 type Database struct {
 	db *sql.DB
+	mu sync.Mutex // Protects all database operations
 }
 
 func NewDatabase(dbPath string) (*Database, error) {

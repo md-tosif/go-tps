@@ -98,7 +98,7 @@ type Config struct {
 
 // ReceiptJob represents a receipt confirmation job
 type ReceiptJob struct {
-	DBPath    string
+	DB        *Database
 	RPCURL    string
 	WSClient  *ethclient.Client
 	TxHash    string
@@ -349,20 +349,6 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG)
 	logInfo("📋 Started %d receipt confirmation workers\n\n", config.ReceiptWorkers)
 
-	// Create database writer channel for serialized writes
-	dbWriteChan := make(chan *Transaction, config.WalletCount*config.TxPerWallet)
-	var dbWriterWG sync.WaitGroup
-	dbWriterWG.Add(1)
-	go func() {
-		defer dbWriterWG.Done()
-		for tx := range dbWriteChan {
-			_, err := db.InsertTransaction(tx)
-			if err != nil {
-				logWarn("  Could not save transaction to DB: %v\n", err)
-			}
-		}
-	}()
-
 	// Parse configuration values
 	value := new(big.Int)
 	value.SetString(config.ValueWei, 10)
@@ -441,14 +427,18 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					// Print failure reason
 					logError("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
 
-					// Send to database writer (non-blocking)
-					dbWriteChan <- dbTx
+					// Save to database (mutex protected)
+					if _, err := db.InsertTransaction(dbTx); err != nil {
+						logWarn("  Could not save failed transaction to DB: %v\n", err)
+					}
 				} else {
 					dbTx.TxHash = result.TxHash
 					dbTx.Status = "pending"
 
-					// Send to database writer (non-blocking)
-					dbWriteChan <- dbTx
+					// Save to database (mutex protected)
+					if _, err := db.InsertTransaction(dbTx); err != nil {
+						logWarn("  Could not save transaction to DB: %v\n", err)
+					}
 
 					logDebug("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
 
@@ -458,7 +448,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 
 					// Send job to receipt worker pool (non-blocking)
 					receiptJobChan <- ReceiptJob{
-						DBPath:    config.DBPath,
+						DB:        db,
 						RPCURL:    config.RPCURL,
 						WSClient:  wsClient,
 						TxHash:    result.TxHash,
@@ -483,10 +473,6 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		fmt.Println("\nWaiting for all transactions to be submitted...")
 		wgSubmit.Wait()
 		fmt.Println("✓ All transactions submitted")
-
-		// Close the database writer channel and wait for all writes to complete
-		close(dbWriteChan)
-		dbWriterWG.Wait()
 		fmt.Println("✓ All transactions saved to database")
 
 		// Close the receipt job channel now that all jobs are submitted
@@ -583,27 +569,12 @@ func startReceiptWorkerPool(workerCount int, jobChan <-chan ReceiptJob, wg *sync
 func receiptWorker(workerID int, jobChan <-chan ReceiptJob, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	var db *Database
 	var txSender *TransactionSender
-	var currentDBPath string
 	var currentRPCURL string
 
 	// Process jobs from channel
 	for job := range jobChan {
-		// Initialize or reuse connections based on job config
-		if db == nil || currentDBPath != job.DBPath {
-			if db != nil {
-				db.Close()
-			}
-			var err error
-			db, err = NewDatabase(job.DBPath)
-			if err != nil {
-				logError("[Worker %d] Could not open DB: %v\n", workerID, err)
-				continue
-			}
-			currentDBPath = job.DBPath
-		}
-
+		// Initialize or reuse RPC connection
 		if txSender == nil || currentRPCURL != job.RPCURL {
 			if txSender != nil {
 				txSender.Close()
@@ -617,20 +588,17 @@ func receiptWorker(workerID int, jobChan <-chan ReceiptJob, wg *sync.WaitGroup) 
 			currentRPCURL = job.RPCURL
 		}
 
-		processReceiptJob(workerID, db, txSender, job)
+		processReceiptJob(workerID, txSender, job)
 	}
 
-	// Cleanup connections
-	if db != nil {
-		db.Close()
-	}
+	// Cleanup RPC connection
 	if txSender != nil {
 		txSender.Close()
 	}
 }
 
 // processReceiptJob processes a single receipt confirmation job
-func processReceiptJob(workerID int, db *Database, txSender *TransactionSender, job ReceiptJob) {
+func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob) {
 	// Wait for receipt with timeout - use shared WebSocket if available
 	ctx := context.Background()
 	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, job.WSClient, common.HexToHash(job.TxHash), 60*time.Second)
@@ -640,58 +608,15 @@ func processReceiptJob(workerID int, db *Database, txSender *TransactionSender, 
 	execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
 
 	if receiptErr != nil {
-		db.UpdateTransactionStatus(job.TxHash, "failed", nil, execTime, receiptErr.Error())
+		job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, execTime, receiptErr.Error())
 		logWarn("  [W%d] Tx (nonce %d): ✗ timeout/error - %v\n", job.WalletNum, job.Nonce, receiptErr)
 	} else {
 		if receipt.Status == 1 {
-			db.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, execTime, "")
+			job.DB.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, execTime, "")
 			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", job.WalletNum, job.Nonce, execTime/1000)
 		} else {
-			db.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, execTime, "transaction reverted")
+			job.DB.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, execTime, "transaction reverted")
 			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", job.WalletNum, job.Nonce)
-		}
-	}
-}
-
-// waitForReceiptInBackground waits for a transaction receipt in a completely independent goroutine
-// DEPRECATED: Use worker pool pattern instead
-// It creates its own database and RPC connections to avoid lifecycle issues
-// Uses shared WebSocket client if available, otherwise falls back to RPC polling
-func waitForReceiptInBackground(dbPath, rpcURL string, wsClient *ethclient.Client, txHash string, nonce uint64, startTime time.Time, walletNum int) {
-	// Create independent database connection for this goroutine
-	db, err := NewDatabase(dbPath)
-	if err != nil {
-		logWarn("  [W%d] Could not open DB for receipt confirmation: %v\n", walletNum, err)
-		return
-	}
-	defer db.Close()
-
-	// Create independent RPC connection for fallback
-	txSender, err := NewTransactionSender(rpcURL)
-	if err != nil {
-		logWarn("  [W%d] Could not connect to RPC for receipt confirmation: %v\n", walletNum, err)
-		return
-	}
-	defer txSender.Close()
-
-	// Wait for receipt with timeout - use shared WebSocket if available
-	ctx := context.Background()
-	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, wsClient, common.HexToHash(txHash), 60*time.Second)
-
-	// Update database with final status
-	confirmedAt := time.Now()
-	execTime := confirmedAt.Sub(startTime).Seconds() * 1000
-
-	if receiptErr != nil {
-		db.UpdateTransactionStatus(txHash, "failed", nil, execTime, receiptErr.Error())
-		logWarn("  [W%d] Tx (nonce %d): ✗ timeout/error - %v\n", walletNum, nonce, receiptErr)
-	} else {
-		if receipt.Status == 1 {
-			db.UpdateTransactionStatus(txHash, "success", &confirmedAt, execTime, "")
-			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", walletNum, nonce, execTime/1000)
-		} else {
-			db.UpdateTransactionStatus(txHash, "failed", &confirmedAt, execTime, "transaction reverted")
-			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", walletNum, nonce)
 		}
 	}
 }
