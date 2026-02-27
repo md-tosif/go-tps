@@ -604,10 +604,8 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, job.WSClient, common.HexToHash(job.TxHash), 60*time.Second)
 
 	if receiptErr != nil {
-		// For failed receipts, use current time and update database
-		confirmedAt := time.Now()
-		execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
-		job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, execTime, 0, "", receiptErr.Error())
+		// For failed receipts, update status but keep original execution_time from submission
+		job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", receiptErr.Error())
 		logWarn("  [W%d] Tx (nonce %d): ✗ timeout/error - %v\n", job.WalletNum, job.Nonce, receiptErr)
 	} else {
 		// Get block header to retrieve block timestamp
@@ -622,13 +620,9 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 			confirmedAt = time.Unix(int64(blockHeader.Time), 0)
 		}
 
-		execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
-
-		if execTime < 0 {
-			logWarn("  [W%d] Negative execution time calculated, setting to 0: %.2f ms\n", job.WalletNum, execTime)
-			execTime = 0
-			// start time + 1 second to avoid zero or negative execution time which can cause issues in stats calculations
-			// because block timestamp
+		// Check for negative/zero block timestamp relative to submission time
+		if confirmedAt.Before(job.StartTime) {
+			logWarn("  [W%d] Block timestamp before submission time, adjusting\n", job.WalletNum)
 			confirmedAt = job.StartTime.Add(1 * time.Second)
 		}
 
@@ -639,11 +633,12 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 			effectiveGasPrice = receipt.EffectiveGasPrice.String()
 		}
 
+		confirmationTime := confirmedAt.Sub(job.StartTime).Seconds()
 		if receipt.Status == 1 {
-			job.DB.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, execTime, gasUsed, effectiveGasPrice, "")
-			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", job.WalletNum, job.Nonce, execTime/1000, gasUsed)
+			job.DB.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, gasUsed, effectiveGasPrice, "")
+			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", job.WalletNum, job.Nonce, confirmationTime, gasUsed)
 		} else {
-			job.DB.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, execTime, gasUsed, effectiveGasPrice, "transaction reverted")
+			job.DB.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, gasUsed, effectiveGasPrice, "transaction reverted")
 			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", job.WalletNum, job.Nonce)
 		}
 	}

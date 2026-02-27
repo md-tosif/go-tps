@@ -125,14 +125,14 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 	return result.LastInsertId()
 }
 
-func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *time.Time, executionTime float64, gasUsed uint64, effectiveGasPrice string, errMsg string) error {
+func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *time.Time, gasUsed uint64, effectiveGasPrice string, errMsg string) error {
 	query := `
 		UPDATE transactions 
-		SET status = ?, confirmed_at = ?, execution_time = ?, gas_used = ?, effective_gas_price = ?, error = ?
+		SET status = ?, confirmed_at = ?, gas_used = ?, effective_gas_price = ?, error = ?
 		WHERE tx_hash = ?
 	`
 
-	_, err := d.db.Exec(query, status, confirmedAt, executionTime, gasUsed, effectiveGasPrice, errMsg, txHash)
+	_, err := d.db.Exec(query, status, confirmedAt, gasUsed, effectiveGasPrice, errMsg, txHash)
 	if err != nil {
 		return fmt.Errorf("failed to update transaction: %w", err)
 	}

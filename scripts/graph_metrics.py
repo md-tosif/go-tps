@@ -108,8 +108,8 @@ def calculate_latency_intervals(conn, batch_number=None):
     """
     Calculate average latency for both execution and confirmation over 1-second intervals.
     
-    Execution latency: Time taken to execute the transaction submission (execution_time in DB)
-    Confirmation latency: Time from submission to confirmation (confirmed_at - submitted_at)
+    Execution latency: Time for the eth_sendRawTransaction RPC call to return (execution_time in DB, ~ms range)
+    Confirmation latency: Time from submission to block inclusion (confirmed_at - submitted_at, ~seconds range)
     
     Returns:
         execution_latency: dict of {timestamp: avg_latency_ms}
