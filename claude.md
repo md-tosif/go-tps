@@ -85,7 +85,7 @@ This document provides a comprehensive understanding of the go-tps codebase for 
 
 ### Core Go Files
 
-#### `main.go` (537 lines)
+#### `main.go` (757 lines)
 **Primary Entry Point**
 
 **Key Functions:**
@@ -95,6 +95,7 @@ This document provides a comprehensive understanding of the go-tps codebase for 
 - `runSingleExecution()` - Single batch execution
 - `waitForReceiptInBackground()` - Async receipt confirmation (uses independent DB connection)
 - `SaveMnemonicToFile()` - Saves generated mnemonic to file
+- `logDebug()`, `logInfo()`, `logWarn()`, `logError()` - Logging functions with level control
 
 **Flow:**
 1. Load config (with defaults)
@@ -119,8 +120,40 @@ const (
     DefaultValueWei           = "1000000000000000" // 0.001 ETH
     DefaultToAddress          = "0x0000000000000000000000000000000000000001"
     DefaultRunDurationMinutes = 0 // 0 = single run, >0 = loop
+    DefaultReceiptWorkers     = 10 // Worker pool size
+    DefaultLogLevel           = "INFO" // DEBUG, INFO, WARN, ERROR
 )
 ```
+
+**Logging System:**
+```go
+// LogLevel enum
+type LogLevel int
+
+const (
+    DEBUG LogLevel = iota  // Shows all logs
+    INFO                   // Shows major milestones
+    WARN                   // Shows warnings and errors
+    ERROR                  // Shows only errors
+)
+
+// Global log level (set from config)
+var currentLogLevel LogLevel = INFO
+
+// Logging functions
+func logDebug(format string, args ...interface{}) // Detailed debug info
+func logInfo(format string, args ...interface{})  // Progress milestones
+func logWarn(format string, args ...interface{})  // Warnings
+func logError(format string, args ...interface{}) // Errors
+```
+
+**Log Level Usage:**
+- **DEBUG**: Wallet details, transaction hashes, balances, nonce info
+- **INFO**: Connection status, initialization, completion milestones
+- **WARN**: Zero balances, connection failures (non-fatal)
+- **ERROR**: Fatal errors that prevent operation
+
+**Note:** Summary reports, section headers, and user prompts always display regardless of log level.
 
 **Important Notes:**
 - Uses `sync.WaitGroup` for goroutine synchronization
@@ -640,6 +673,7 @@ dbWriteChan <- &Transaction{...}
 | `TO_ADDRESS` | string | `0x000...001` | Recipient address |
 | `RUN_DURATION_MINUTES` | int | `0` | Loop mode duration (0 = single run) |
 | `RECEIPT_WORKERS` | int | `10` | Number of concurrent workers for receipt confirmation |
+| `LOG_LEVEL` | string | `"INFO"` | Log level: DEBUG, INFO, WARN, ERROR |
 
 ### Example Configurations
 

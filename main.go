@@ -23,9 +23,64 @@ const (
 	DefaultTxPerWallet        = 10
 	DefaultValueWei           = "1000000000000000" // 0.001 ETH
 	DefaultToAddress          = "0x0000000000000000000000000000000000000001"
-	DefaultRunDurationMinutes = 0  // 0 = run once, >0 = loop for duration
-	DefaultReceiptWorkers     = 10 // Number of concurrent workers for receipt confirmation
+	DefaultRunDurationMinutes = 0       // 0 = run once, >0 = loop for duration
+	DefaultReceiptWorkers     = 10      // Number of concurrent workers for receipt confirmation
+	DefaultLogLevel           = "DEBUG" // DEBUG, INFO, WARN, ERROR
 )
+
+// LogLevel represents logging levels
+type LogLevel int
+
+const (
+	DEBUG LogLevel = iota
+	INFO
+	WARN
+	ERROR
+)
+
+// Global logging configuration
+var currentLogLevel LogLevel = INFO
+
+// parseLogLevel converts string to LogLevel
+func parseLogLevel(level string) LogLevel {
+	switch strings.ToUpper(level) {
+	case "DEBUG":
+		return DEBUG
+	case "INFO":
+		return INFO
+	case "WARN", "WARNING":
+		return WARN
+	case "ERROR":
+		return ERROR
+	default:
+		return INFO
+	}
+}
+
+// Logging functions
+func logDebug(format string, args ...interface{}) {
+	if currentLogLevel <= DEBUG {
+		fmt.Printf("[DEBUG] "+format, args...)
+	}
+}
+
+func logInfo(format string, args ...interface{}) {
+	if currentLogLevel <= INFO {
+		fmt.Printf("[INFO] "+format, args...)
+	}
+}
+
+func logWarn(format string, args ...interface{}) {
+	if currentLogLevel <= WARN {
+		fmt.Printf("[WARN] "+format, args...)
+	}
+}
+
+func logError(format string, args ...interface{}) {
+	if currentLogLevel <= ERROR {
+		fmt.Printf("[ERROR] "+format, args...)
+	}
+}
 
 type Config struct {
 	RPCURL             string
@@ -38,6 +93,7 @@ type Config struct {
 	ToAddress          string
 	RunDurationMinutes int
 	ReceiptWorkers     int
+	LogLevel           string
 }
 
 // ReceiptJob represents a receipt confirmation job
@@ -57,89 +113,89 @@ func main() {
 
 	// Load .env file if it exists (optional)
 	if err := godotenv.Load(); err != nil {
-		fmt.Println("No .env file found, using environment variables or defaults")
+		logDebug("No .env file found, using environment variables or defaults\n")
 	}
 
 	// Load configuration
 	config := LoadConfig()
 
 	// Initialize database
-	fmt.Println("Initializing database...")
+	logInfo("Initializing database...\n")
 	db, err := NewDatabase(config.DBPath)
 	if err != nil {
-		fmt.Printf("Error initializing database: %v\n", err)
+		logError("Error initializing database: %v\n", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-	fmt.Println("✓ Database initialized")
+	logInfo("✓ Database initialized\n")
 
 	// Connect to RPC
-	fmt.Printf("Connecting to RPC: %s\n", config.RPCURL)
+	logInfo("Connecting to RPC: %s\n", config.RPCURL)
 	txSender, err := NewTransactionSender(config.RPCURL)
 	if err != nil {
-		fmt.Printf("Error connecting to RPC: %v\n", err)
+		logError("Error connecting to RPC: %v\n", err)
 		os.Exit(1)
 	}
 	defer txSender.Close()
-	fmt.Println("✓ Connected to RPC")
+	logInfo("✓ Connected to RPC\n")
 
 	// Connect to WebSocket if URL is provided (for faster receipt confirmations)
 	var wsClient *ethclient.Client
 	if config.WSURL != "" {
-		fmt.Printf("Connecting to WebSocket: %s\n", config.WSURL)
+		logInfo("Connecting to WebSocket: %s\n", config.WSURL)
 		wsClient, err = ethclient.Dial(config.WSURL)
 		if err != nil {
-			fmt.Printf("Warning: Could not connect to WebSocket (will use RPC polling): %v\n", err)
+			logWarn("Could not connect to WebSocket (will use RPC polling): %v\n", err)
 			wsClient = nil
 		} else {
 			defer wsClient.Close()
-			fmt.Println("✓ Connected to WebSocket")
+			logInfo("✓ Connected to WebSocket\n")
 		}
 	} else {
-		fmt.Println("No WebSocket URL provided, will use RPC polling for receipts")
+		logDebug("No WebSocket URL provided, will use RPC polling for receipts\n")
 	}
 
 	// Get or generate mnemonic
 	var mnemonic string
 	if config.Mnemonic != "" {
-		fmt.Println("\nUsing provided mnemonic...")
+		logInfo("\nUsing provided mnemonic...\n")
 		mnemonic = config.Mnemonic
 	} else {
-		fmt.Println("\nGenerating new mnemonic...")
+		logInfo("\nGenerating new mnemonic...\n")
 		var err error
 		mnemonic, err = GenerateMnemonic()
 		if err != nil {
-			fmt.Printf("Error generating mnemonic: %v\n", err)
+			logError("Error generating mnemonic: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	// Generate wallets from single mnemonic
-	fmt.Printf("Deriving %d wallets from mnemonic...\n", config.WalletCount)
+	logInfo("Deriving %d wallets from mnemonic...\n", config.WalletCount)
 
 	wallets, err := DeriveWalletsFromMnemonic(mnemonic, config.WalletCount)
 	if err != nil {
-		fmt.Printf("Error deriving wallets: %v\n", err)
+		logError("Error deriving wallets: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Save mnemonic to file
 	err = SaveMnemonicToFile("mnemonic.txt", mnemonic)
 	if err != nil {
-		fmt.Printf("Warning: Could not save mnemonic: %v\n", err)
+		logWarn("Could not save mnemonic: %v\n", err)
 	}
 
-	fmt.Printf("✓ Generated %d wallets\n", len(wallets))
+	logInfo("✓ Generated %d wallets\n", len(wallets))
 
 	// Save wallets to database
-	fmt.Println("\nSaving wallets to database...")
+	logInfo("\nSaving wallets to database...\n")
 	for _, wallet := range wallets {
 		err := db.InsertWallet(wallet.Address.Hex(), wallet.DerivationPath)
 		if err != nil {
-			fmt.Printf("Warning: Could not save wallet %s: %v\n", wallet.Address.Hex(), err)
+			logWarn("Could not save wallet %s: %v\n", wallet.Address.Hex(), err)
 		}
 	}
-	fmt.Println("✓ Wallets saved to database")
+	logInfo("✓ Wallets saved to database\n")
 
 	// Display wallet addresses and balances
 	fmt.Println("\n" + strings.Repeat("=", 60))
@@ -153,8 +209,8 @@ func main() {
 	for i, wallet := range wallets {
 		balance, err := txSender.GetBalance(ctx, wallet.Address)
 		if err != nil {
-			fmt.Printf("[%d] %s\n", i+1, wallet.Address.Hex())
-			fmt.Printf("    Balance: ERROR - %v\n", err)
+			logDebug("[%d] %s\n", i+1, wallet.Address.Hex())
+			logError("    Balance: ERROR - %v\n", err)
 			allFunded = false
 		} else {
 			// Convert balance to ETH for display
@@ -166,11 +222,11 @@ func main() {
 
 			// Check if balance is zero
 			if balance.Cmp(big.NewInt(0)) == 0 {
-				fmt.Printf("    ⚠️  WARNING: Wallet has ZERO balance!\n")
+				logWarn("    ⚠️  WARNING: Wallet has ZERO balance!\n")
 				allFunded = false
 			}
 		}
-		fmt.Println()
+		logDebug("\n")
 	}
 
 	fmt.Println(strings.Repeat("=", 60))
@@ -291,7 +347,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	receiptJobChan := make(chan ReceiptJob, config.WalletCount*config.TxPerWallet)
 	var receiptWG sync.WaitGroup
 	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG)
-	fmt.Printf("📋 Started %d receipt confirmation workers\n\n", config.ReceiptWorkers)
+	logInfo("📋 Started %d receipt confirmation workers\n\n", config.ReceiptWorkers)
 
 	// Create database writer channel for serialized writes
 	dbWriteChan := make(chan *Transaction, config.WalletCount*config.TxPerWallet)
@@ -302,7 +358,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		for tx := range dbWriteChan {
 			_, err := db.InsertTransaction(tx)
 			if err != nil {
-				fmt.Printf("  Warning: Could not save transaction to DB: %v\n", err)
+				logWarn("  Could not save transaction to DB: %v\n", err)
 			}
 		}
 	}()
@@ -312,13 +368,13 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	value.SetString(config.ValueWei, 10)
 	toAddress := common.HexToAddress(config.ToAddress)
 
-	fmt.Printf("\nTransaction Configuration:\n")
-	fmt.Printf("  - Number of wallets: %d\n", len(wallets))
-	fmt.Printf("  - Transactions per wallet: %d\n", config.TxPerWallet)
-	fmt.Printf("  - Total transactions: %d\n", len(wallets)*config.TxPerWallet)
-	fmt.Printf("  - Target address: %s\n", toAddress.Hex())
-	fmt.Printf("  - Value per tx: %s wei\n", value.String())
-	fmt.Println()
+	logInfo("\nTransaction Configuration:\n")
+	logInfo("  - Number of wallets: %d\n", len(wallets))
+	logInfo("  - Transactions per wallet: %d\n", config.TxPerWallet)
+	logInfo("  - Total transactions: %d\n", len(wallets)*config.TxPerWallet)
+	logInfo("  - Target address: %s\n", toAddress.Hex())
+	logInfo("  - Value per tx: %s wei\n", value.String())
+	logInfo("\n")
 
 	// Create and send transactions
 	totalTransactions := 0
@@ -340,7 +396,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		go func(idx int, w *Wallet) {
 			defer wgSubmit.Done()
 
-			fmt.Printf("\n[Wallet %d/%d] (%s)\n",
+			logDebug("\n[Wallet %d/%d] (%s)\n",
 				idx+1, len(wallets), w.Address.Hex())
 
 			// Prepare batch transactions with precalculated nonces
@@ -353,7 +409,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 			)
 
 			if err != nil {
-				fmt.Printf("  Error preparing transactions: %v\n", err)
+				logError("  Error preparing transactions: %v\n", err)
 				return
 			}
 
@@ -382,6 +438,9 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					totalTransactions++
 					mu.Unlock()
 
+					// Print failure reason
+					logError("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
+
 					// Send to database writer (non-blocking)
 					dbWriteChan <- dbTx
 				} else {
@@ -391,7 +450,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					// Send to database writer (non-blocking)
 					dbWriteChan <- dbTx
 
-					fmt.Printf("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
+					logDebug("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
 
 					mu.Lock()
 					totalTransactions++
@@ -410,7 +469,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 				}
 			}
 
-			fmt.Printf("  [W%d] ✓ Sent %d transactions (nonce %d to %d)\n",
+			logInfo("  [W%d] ✓ Sent %d transactions (nonce %d to %d)\n",
 				idx+1,
 				len(txRequests),
 				txRequests[0].Nonce,
@@ -460,6 +519,34 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 				float64(submitted)/totalTime.Seconds())
 		}
 		fmt.Println()
+
+		// Display failed transactions if any
+		if failed > 0 {
+			fmt.Println("=== Failed Transactions ===")
+			fmt.Println()
+
+			// Query failed transactions from database
+			failures, err := db.GetFailedTransactions(batchNumber, 20)
+
+			if err == nil && len(failures) > 0 {
+				for i, fail := range failures {
+					walletShort := fail["wallet_address"]
+					if len(walletShort) > 10 {
+						walletShort = walletShort[:10] + "..."
+					}
+					fmt.Printf("  %d. Wallet %s (nonce %s): %s\n",
+						i+1, walletShort, fail["nonce"], fail["error"])
+				}
+				if failed > 20 {
+					fmt.Printf("  ... and %d more (showing first 20)\n", failed-20)
+				}
+			} else if err != nil {
+				fmt.Printf("  Could not retrieve failed transactions: %v\n", err)
+			} else if len(failures) == 0 && failed > 0 {
+				fmt.Println("  (Failed transactions not yet recorded in database)")
+			}
+			fmt.Println()
+		}
 
 		// Get database statistics
 		stats, err := db.GetTransactionStats()
@@ -511,7 +598,7 @@ func receiptWorker(workerID int, jobChan <-chan ReceiptJob, wg *sync.WaitGroup) 
 			var err error
 			db, err = NewDatabase(job.DBPath)
 			if err != nil {
-				fmt.Printf("[Worker %d] Error: Could not open DB: %v\n", workerID, err)
+				logError("[Worker %d] Could not open DB: %v\n", workerID, err)
 				continue
 			}
 			currentDBPath = job.DBPath
@@ -524,7 +611,7 @@ func receiptWorker(workerID int, jobChan <-chan ReceiptJob, wg *sync.WaitGroup) 
 			var err error
 			txSender, err = NewTransactionSender(job.RPCURL)
 			if err != nil {
-				fmt.Printf("[Worker %d] Error: Could not connect to RPC: %v\n", workerID, err)
+				logError("[Worker %d] Could not connect to RPC: %v\n", workerID, err)
 				continue
 			}
 			currentRPCURL = job.RPCURL
@@ -554,14 +641,14 @@ func processReceiptJob(workerID int, db *Database, txSender *TransactionSender, 
 
 	if receiptErr != nil {
 		db.UpdateTransactionStatus(job.TxHash, "failed", nil, execTime, receiptErr.Error())
-		fmt.Printf("  [W%d] Tx (nonce %d): ✗ timeout/error\n", job.WalletNum, job.Nonce)
+		logWarn("  [W%d] Tx (nonce %d): ✗ timeout/error - %v\n", job.WalletNum, job.Nonce, receiptErr)
 	} else {
 		if receipt.Status == 1 {
 			db.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, execTime, "")
-			fmt.Printf("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", job.WalletNum, job.Nonce, execTime/1000)
+			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", job.WalletNum, job.Nonce, execTime/1000)
 		} else {
 			db.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, execTime, "transaction reverted")
-			fmt.Printf("  [W%d] Tx (nonce %d): ✗ reverted\n", job.WalletNum, job.Nonce)
+			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", job.WalletNum, job.Nonce)
 		}
 	}
 }
@@ -574,7 +661,7 @@ func waitForReceiptInBackground(dbPath, rpcURL string, wsClient *ethclient.Clien
 	// Create independent database connection for this goroutine
 	db, err := NewDatabase(dbPath)
 	if err != nil {
-		fmt.Printf("  [W%d] Warning: Could not open DB for receipt confirmation: %v\n", walletNum, err)
+		logWarn("  [W%d] Could not open DB for receipt confirmation: %v\n", walletNum, err)
 		return
 	}
 	defer db.Close()
@@ -582,7 +669,7 @@ func waitForReceiptInBackground(dbPath, rpcURL string, wsClient *ethclient.Clien
 	// Create independent RPC connection for fallback
 	txSender, err := NewTransactionSender(rpcURL)
 	if err != nil {
-		fmt.Printf("  [W%d] Warning: Could not connect to RPC for receipt confirmation: %v\n", walletNum, err)
+		logWarn("  [W%d] Could not connect to RPC for receipt confirmation: %v\n", walletNum, err)
 		return
 	}
 	defer txSender.Close()
@@ -597,14 +684,14 @@ func waitForReceiptInBackground(dbPath, rpcURL string, wsClient *ethclient.Clien
 
 	if receiptErr != nil {
 		db.UpdateTransactionStatus(txHash, "failed", nil, execTime, receiptErr.Error())
-		fmt.Printf("  [W%d] Tx (nonce %d): ✗ timeout/error\n", walletNum, nonce)
+		logWarn("  [W%d] Tx (nonce %d): ✗ timeout/error - %v\n", walletNum, nonce, receiptErr)
 	} else {
 		if receipt.Status == 1 {
 			db.UpdateTransactionStatus(txHash, "success", &confirmedAt, execTime, "")
-			fmt.Printf("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", walletNum, nonce, execTime/1000)
+			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", walletNum, nonce, execTime/1000)
 		} else {
 			db.UpdateTransactionStatus(txHash, "failed", &confirmedAt, execTime, "transaction reverted")
-			fmt.Printf("  [W%d] Tx (nonce %d): ✗ reverted\n", walletNum, nonce)
+			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", walletNum, nonce)
 		}
 	}
 }
@@ -622,7 +709,11 @@ func LoadConfig() *Config {
 		ToAddress:          getEnv("TO_ADDRESS", DefaultToAddress),
 		RunDurationMinutes: getEnvInt("RUN_DURATION_MINUTES", DefaultRunDurationMinutes),
 		ReceiptWorkers:     getEnvInt("RECEIPT_WORKERS", DefaultReceiptWorkers),
+		LogLevel:           getEnv("LOG_LEVEL", DefaultLogLevel),
 	}
+
+	// Set global log level
+	currentLogLevel = parseLogLevel(config.LogLevel)
 
 	return config
 }

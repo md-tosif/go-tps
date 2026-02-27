@@ -326,6 +326,43 @@ func (d *Database) ListBatches() ([]string, error) {
 	return batches, rows.Err()
 }
 
+// GetFailedTransactions retrieves failed transactions for a specific batch
+func (d *Database) GetFailedTransactions(batchNumber string, limit int) ([]map[string]string, error) {
+	query := `
+		SELECT wallet_address, nonce, error, tx_hash
+		FROM transactions 
+		WHERE batch_number = ? AND status = 'failed' AND error IS NOT NULL AND error != ''
+		ORDER BY id
+	`
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := d.db.Query(query, batchNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var failures []map[string]string
+	for rows.Next() {
+		var walletAddr, nonce, errMsg, txHash string
+		if err := rows.Scan(&walletAddr, &nonce, &errMsg, &txHash); err != nil {
+			return nil, err
+		}
+
+		failures = append(failures, map[string]string{
+			"wallet_address": walletAddr,
+			"nonce":          nonce,
+			"error":          errMsg,
+			"tx_hash":        txHash,
+		})
+	}
+
+	return failures, rows.Err()
+}
+
 func (d *Database) Close() error {
 	return d.db.Close()
 }

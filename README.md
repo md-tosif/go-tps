@@ -23,6 +23,7 @@ A Go-based tool for testing Ethereum network transaction throughput. This tool g
   - [Using a Specific Mnemonic](#using-a-specific-mnemonic)
   - [Wallet Funding Check](#wallet-funding-check)
   - [Loop Mode](#loop-mode-continuous-testing)
+  - [Log Levels](#log-levels)
 - [Output](#output)
 - [Performance Analysis](#performance-analysis)
 - [Project Structure](#project-structure)
@@ -93,6 +94,7 @@ Configure the application using environment variables:
 | `TO_ADDRESS` | Recipient address for all transactions | `0x0000000000000000000000000000000000000001` |
 | `RUN_DURATION_MINUTES` | Duration to run in loop mode (0 = single run) | `0` |
 | `RECEIPT_WORKERS` | Number of concurrent workers for receipt confirmation | `10` |
+| `LOG_LEVEL` | Log level: DEBUG, INFO, WARN, ERROR | `INFO` |
 
 ## Usage
 
@@ -221,6 +223,51 @@ TX_PER_WALLET=20 \
 - 2-second delay between iterations
 
 **Note:** In loop mode, the mnemonic will be regenerated for each iteration unless you specify `MNEMONIC` environment variable to reuse the same wallets.
+
+### Log Levels
+
+Control console output verbosity with the `LOG_LEVEL` environment variable. This helps you focus on the information you need and reduce noise.
+
+**Available Log Levels:**
+
+- **DEBUG**: Shows all logs including detailed transaction info, wallet addresses, balances, nonce details
+  - Use for: Debugging issues, understanding detailed flow, development
+  
+- **INFO** (default): Shows major milestones and progress updates
+  - Use for: Normal operations, monitoring progress, production runs
+  
+- **WARN**: Shows only warnings and errors
+  - Use for: Production monitoring, when you only care about issues
+  
+- **ERROR**: Shows only critical errors
+  - Use for: Silent operation where only failures matter
+
+**Examples:**
+
+```bash
+# Show all detailed debug information
+LOG_LEVEL=DEBUG ./go-tps
+
+# Show only major milestones (default)
+LOG_LEVEL=INFO ./go-tps
+
+# Show only warnings and errors
+LOG_LEVEL=WARN ./go-tps
+
+# Show only errors (silent mode)
+LOG_LEVEL=ERROR ./go-tps
+```
+
+**What each level shows:**
+
+| Level | Initializing | Wallet Details | Transaction Submission | Receipt Confirmations | Errors |
+|-------|-------------|----------------|------------------------|----------------------|--------|
+| DEBUG | ✓ | ✓ | ✓ | ✓ | ✓ |
+| INFO  | ✓ | ✗ | Summary only | Success only | ✓ |
+| WARN  | ✗ | ✗ | ✗ | Failures only | ✓ |
+| ERROR | ✗ | ✗ | ✗ | ✗ | ✓ |
+
+**Note:** Summary reports, headers, and user prompts are always displayed regardless of log level.
 
 ## Output
 
