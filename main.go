@@ -201,11 +201,11 @@ func main() {
 
 		if executionElapsed < minDuration {
 			remainingSleep := minDuration - executionElapsed
-			fmt.Printf("\n⏱  Execution completed in %.3f seconds. Waiting %.3f seconds to maintain 1-second minimum...\n",
+			fmt.Printf("\n⏱  Execution completed in %.6f seconds. Waiting %.6f seconds to maintain 1-second minimum...\n",
 				executionElapsed.Seconds(), remainingSleep.Seconds())
 			time.Sleep(remainingSleep)
 		} else {
-			fmt.Printf("\n⏱  Execution completed in %.3f seconds\n", executionElapsed.Seconds())
+			fmt.Printf("\n⏱  Execution completed in %.6f seconds\n", executionElapsed.Seconds())
 		}
 	}
 

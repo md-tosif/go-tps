@@ -194,6 +194,7 @@ func (ts *TransactionSender) WaitForReceipt(ctx context.Context, txHash common.H
 
 // WaitForReceiptWithSharedWebSocket uses a shared WebSocket client for receipt confirmation, falls back to RPC polling
 // This avoids creating multiple WebSocket connections
+// Runs multiple receipt check strategies in parallel for faster confirmation
 func (ts *TransactionSender) WaitForReceiptWithSharedWebSocket(ctx context.Context, wsClient *ethclient.Client, txHash common.Hash, timeout time.Duration) (*types.Receipt, error) {
 	// If WebSocket client is not provided, use RPC polling
 	if wsClient == nil {
@@ -204,33 +205,80 @@ func (ts *TransactionSender) WaitForReceiptWithSharedWebSocket(ctx context.Conte
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Subscribe to new block headers using shared WebSocket client
-	headers := make(chan *types.Header)
-	sub, err := wsClient.SubscribeNewHead(ctx, headers)
-	if err != nil {
-		// Subscription failed, fallback to RPC polling
-		return ts.WaitForReceipt(ctx, txHash, timeout)
-	}
-	defer sub.Unsubscribe()
+	// Channel to receive receipt from any goroutine
+	receiptChan := make(chan *types.Receipt, 1)
 
-	// Wait for receipt using WebSocket notifications
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("timeout waiting for transaction receipt")
-		case subErr := <-sub.Err():
-			// Subscription error, fallback to RPC polling
-			if subErr != nil {
-				return ts.WaitForReceipt(ctx, txHash, timeout)
-			}
-		case <-headers:
-			// New block received, check for receipt
-			receipt, err := wsClient.TransactionReceipt(ctx, txHash)
-			if err == nil {
-				return receipt, nil
-			}
-			// Transaction not yet mined, continue waiting
+	// Goroutine 1: Subscribe to new block headers and check on each new block
+	go func() {
+		headers := make(chan *types.Header)
+		sub, err := wsClient.SubscribeNewHead(ctx, headers)
+		if err != nil {
+			// Subscription failed, but don't error out - let polling handle it
+			return
 		}
+		defer sub.Unsubscribe()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case subErr := <-sub.Err():
+				if subErr != nil {
+					return
+				}
+			case <-headers:
+				// New block received, check for receipt
+				receipt, err := wsClient.TransactionReceipt(ctx, txHash)
+				if err == nil {
+					select {
+					case receiptChan <- receipt:
+					default:
+					}
+					return
+				}
+			}
+		}
+	}()
+
+	// Goroutine 2: Poll for receipt at regular intervals using RPC client
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		// Check immediately first
+		receipt, err := ts.client.TransactionReceipt(ctx, txHash)
+		if err == nil {
+			select {
+			case receiptChan <- receipt:
+			default:
+			}
+			return
+		}
+
+		// Continue polling
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				receipt, err := ts.client.TransactionReceipt(ctx, txHash)
+				if err == nil {
+					select {
+					case receiptChan <- receipt:
+					default:
+					}
+					return
+				}
+			}
+		}
+	}()
+
+	// Wait for receipt from any goroutine or timeout
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("timeout waiting for transaction receipt")
+	case receipt := <-receiptChan:
+		return receipt, nil
 	}
 }
 
