@@ -2,18 +2,61 @@
 
 A Go-based tool for testing Ethereum network transaction throughput. This tool generates multiple wallets from mnemonics, creates batched transactions with precalculated nonces, and tracks performance metrics in a SQLite database.
 
+## 📚 Documentation
+
+- **[QUICKSTART.md](QUICKSTART.md)** - Quick start guide for first-time users
+- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - Detailed project structure and file descriptions
+- **[BATCH_TRACKING.md](BATCH_TRACKING.md)** - Guide to batch tracking feature
+- **[claude.md](claude.md)** - Comprehensive technical documentation for AI assistants
+- **[queries.sql](queries.sql)** - Pre-written SQL queries for analysis
+- **[analyze.sh](analyze.sh)** - Shell script for easy database analysis
+
+## 📑 Table of Contents
+
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+  - [Basic Usage](#basic-usage)
+  - [Custom Configuration](#custom-configuration)
+  - [Using a Specific Mnemonic](#using-a-specific-mnemonic)
+  - [Wallet Funding Check](#wallet-funding-check)
+  - [Loop Mode](#loop-mode-continuous-testing)
+- [Output](#output)
+- [Performance Analysis](#performance-analysis)
+- [Project Structure](#project-structure)
+- [Important Security Notes](#important-security-notes)
+- [How It Works](#how-it-works)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [Contributing](#contributing)
+- [Dependencies](#dependencies)
+- [Disclaimer](#disclaimer)
+
 ## Features
 
-- ✅ Generate multiple Ethereum wallets from BIP39 mnemonics
-- ✅ Hierarchical Deterministic (HD) wallet support
-- ✅ Precalculated nonce management for batch transactions
-- ✅ Concurrent transaction submission to a single RPC endpoint
-- ✅ Parallel wallet processing with goroutines
-- ✅ Async receipt waiting (non-blocking confirmations)
-- ✅ Loop mode for continuous testing over time
-- ✅ SQLite database for transaction tracking and performance analysis
-- ✅ Detailed execution time metrics and TPS calculations
-- ✅ Configurable via environment variables or .env file
+### Core Features
+
+- ✅ **Multi-Wallet Generation** - Generate multiple Ethereum wallets from BIP39 mnemonics
+- ✅ **HD Wallet Support** - Hierarchical Deterministic (HD) wallet support using BIP44
+- ✅ **Smart Nonce Management** - Precalculated nonce management for batch transactions
+- ✅ **Concurrent Execution** - Parallel wallet processing with goroutines
+- ✅ **Batch Tracking** - Unique batch numbers for tracking multiple test runs
+- ✅ **Async Receipt Confirmation** - Non-blocking receipt waiting with WebSocket + RPC polling
+- ✅ **Loop Mode** - Continuous testing over specified time duration
+- ✅ **Performance Metrics** - SQLite database for transaction tracking and TPS calculations
+- ✅ **Detailed Analysis** - Built-in analysis tools (analyze.sh) and pre-written SQL queries
+- ✅ **Flexible Configuration** - Environment variables or .env file configuration
+
+### Technical Features
+
+- 🔐 **Secure Key Management** - BIP39 mnemonic generation and secure key derivation
+- 🚀 **High Performance** - Optimized for maximum throughput testing
+- 📊 **Rich Analytics** - TPS calculations, execution times, success rates, and more
+- 🔄 **Dual Receipt Strategy** - WebSocket subscriptions + RPC polling for faster confirmations
+- 💾 **Persistent Storage** - SQLite database with indexed queries for fast analysis
+- 🎯 **User-Friendly** - Balance checks, confirmation prompts, and real-time progress updates
 
 ## Prerequisites
 
@@ -345,7 +388,49 @@ GOOS=windows GOARCH=amd64 go build -o go-tps.exe
 
 ## Contributing
 
-Feel free to open issues or submit pull requests for improvements.
+Contributions are welcome! Here's how you can help:
+
+1. **Bug Reports** - Open an issue with detailed reproduction steps
+2. **Feature Requests** - Suggest improvements or new features
+3. **Code Contributions** - Submit pull requests with tests
+4. **Documentation** - Improve or translate documentation
+5. **Testing** - Test on different networks and report results
+
+### Development Workflow
+
+```bash
+# Fork and clone the repository
+git clone https://github.com/yourusername/go-tps.git
+cd go-tps
+
+# Create a feature branch
+git checkout -b feature/your-feature
+
+# Make changes and test
+go build -o go-tps .
+./go-tps
+
+# Run tests (when available)
+go test ./...
+
+# Format code
+go fmt ./...
+
+# Commit and push
+git add .
+git commit -m "Add your feature"
+git push origin feature/your-feature
+
+# Open a pull request
+```
+
+### Code Style
+
+- Follow standard Go conventions
+- Use `go fmt` for formatting
+- Add comments for complex logic
+- Write descriptive commit messages
+- Include tests for new features
 
 ## License
 
@@ -361,3 +446,223 @@ MIT License - See LICENSE file for details
 ## Disclaimer
 
 This tool is for testing and educational purposes only. Use at your own risk. The authors are not responsible for any loss of funds or other damages.
+
+**Important Warnings:**
+- ⚠️ Never use on mainnet unless you fully understand the risks
+- ⚠️ Always test with small amounts first
+- ⚠️ Keep your mnemonics secure
+- ⚠️ Monitor gas costs during testing
+- ⚠️ Be aware of RPC rate limits
+
+## Advanced Usage
+
+### WebSocket Support for Faster Confirmations
+
+Enable WebSocket for real-time receipt confirmations:
+
+```bash
+RPC_URL="http://localhost:8545" \
+WS_URL="ws://localhost:8546" \
+./go-tps
+```
+
+This enables dual-strategy receipt confirmation:
+- WebSocket subscriptions (real-time, faster)
+- RPC polling (fallback, more reliable)
+
+### Batch Comparison
+
+Compare performance across multiple test runs:
+
+```bash
+# Run multiple tests with different configurations
+WALLET_COUNT=5 TX_PER_WALLET=10 ./go-tps
+WALLET_COUNT=10 TX_PER_WALLET=10 ./go-tps
+WALLET_COUNT=20 TX_PER_WALLET=10 ./go-tps
+
+# Compare all batches
+./analyze.sh batches
+```
+
+### Custom Analysis
+
+Write custom SQL queries for specific analysis:
+
+```bash
+sqlite3 transactions.db
+```
+
+```sql
+-- Find slowest transactions
+SELECT tx_hash, execution_time 
+FROM transactions 
+WHERE status = 'success' 
+ORDER BY execution_time DESC 
+LIMIT 10;
+
+-- Calculate success rate by wallet
+SELECT 
+    wallet_address,
+    ROUND(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as success_rate
+FROM transactions
+GROUP BY wallet_address;
+
+-- Hourly transaction volume
+SELECT 
+    strftime('%H:00', submitted_at) as hour,
+    COUNT(*) as tx_count,
+    ROUND(AVG(execution_time), 2) as avg_time_ms
+FROM transactions
+GROUP BY hour;
+```
+
+### Tips & Best Practices
+
+**1. Wallet Management**
+- Reuse mnemonics for consistent testing
+- Keep track of which wallets are funded
+- Use separate mnemonics for different test scenarios
+
+**2. Performance Optimization**
+- Increase `WALLET_COUNT` for more parallelism
+- Use WebSocket for faster receipt confirmations
+- Monitor RPC endpoint performance
+- Test during off-peak hours for consistent results
+
+**3. Database Management**
+- Regularly backup your database for long-term data
+- Use batch numbers to organize different test runs
+- Export data periodically for external analysis
+- Clean up old test data if disk space is limited
+
+**4. Network Testing**
+- Start with small loads (2-3 wallets, 2-3 tx each)
+- Gradually increase load to find limits
+- Monitor RPC endpoint for errors or rate limiting
+- Use local nodes for maximum control
+
+**5. Analysis & Reporting**
+- Run `./analyze.sh summary` after each test
+- Compare TPS across different configurations
+- Export data to CSV for spreadsheet analysis
+- Track trends over time with loop mode
+
+### Environment File (.env)
+
+Create a `.env` file for persistent configuration:
+
+```bash
+# .env file
+RPC_URL=http://localhost:8545
+WS_URL=ws://localhost:8546
+DB_PATH=./transactions.db
+WALLET_COUNT=10
+TX_PER_WALLET=10
+VALUE_WEI=1000000000000000
+TO_ADDRESS=0x0000000000000000000000000000000000000001
+RUN_DURATION_MINUTES=0
+```
+
+Then simply run:
+```bash
+./go-tps
+```
+
+### Integration with CI/CD
+
+Example GitHub Actions workflow:
+
+```yaml
+name: TPS Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: '1.19'
+      
+      - name: Build
+        run: go build -o go-tps .
+      
+      - name: Start local node
+        run: |
+          npx hardhat node &
+          sleep 5
+      
+      - name: Run TPS test
+        run: |
+          RPC_URL="http://localhost:8545" \
+          WALLET_COUNT=2 \
+          TX_PER_WALLET=2 \
+          ./go-tps
+      
+      - name: Analyze results
+        run: ./analyze.sh summary
+```
+
+## FAQ
+
+**Q: Can I use this on mainnet?**
+A: Technically yes, but it's **strongly discouraged**. Use test networks for safety.
+
+**Q: How many wallets should I use?**
+A: Start with 5-10 wallets. Increase based on your RPC endpoint's capacity.
+
+**Q: Why are my transactions failing?**
+A: Common reasons: insufficient funds, nonce conflicts, gas price too low, RPC issues.
+
+**Q: Can I stop the tool while it's running?**
+A: Yes, but some transactions may be pending. Receipt confirmations will be incomplete.
+
+**Q: How do I delete old test data?**
+A: Delete specific batches with SQL or remove `transactions.db` entirely.
+
+**Q: What's the maximum TPS I can achieve?**
+A: Depends on: RPC endpoint capacity, network conditions, wallet count, hardware.
+
+**Q: Can I test ERC-20 token transfers?**
+A: Not currently. This version only supports ETH transfers. ERC-20 support is a potential future enhancement.
+
+**Q: How long does receipt confirmation take?**
+A: Typically 10-30 seconds, varies with network congestion and block time.
+
+## Changelog
+
+### Version 1.0 (Current)
+- Initial release
+- Batch tracking feature
+- Loop mode support
+- WebSocket + RPC dual-strategy receipts
+- Async receipt confirmation
+- Comprehensive analysis tools
+
+## Roadmap
+
+Potential future enhancements:
+- [ ] EIP-1559 transaction support (Type 2)
+- [ ] ERC-20 token transfer testing
+- [ ] Contract interaction support
+- [ ] Dynamic gas price adjustment
+- [ ] Web-based dashboard
+- [ ] Prometheus metrics export
+- [ ] Multi-RPC endpoint support
+- [ ] Automatic retry logic
+- [ ] Real-time TPS monitoring
+- [ ] Custom transaction data
+
+## Support
+
+For questions, issues, or feature requests:
+- Open an issue on GitHub
+- Review existing documentation
+- Check the troubleshooting section
+- Consult [claude.md](claude.md) for technical details
+
+---
+
+**Happy Testing! 🚀**

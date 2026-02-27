@@ -1,5 +1,15 @@
 # Quick Start Guide
 
+Get up and running with go-tps in under 10 minutes!
+
+## 📚 Additional Resources
+
+Before starting, check out these resources:
+- **[README.md](README.md)** - Comprehensive documentation
+- **[claude.md](claude.md)** - Technical deep-dive for developers
+- **[BATCH_TRACKING.md](BATCH_TRACKING.md)** - Understanding batch tracking
+- **[queries.sql](queries.sql)** - Analysis query examples
+
 ## Prerequisites
 - Go 1.19+ installed
 - An Ethereum RPC endpoint (local testnet recommended)
@@ -198,5 +208,70 @@ After successful runs, analyze your transaction performance:
 2. Compare TPS across different configurations
 3. Test with different network conditions
 4. Profile gas usage patterns
+
+## After Your First Successful Run
+
+### Analyze Your Results
+
+```bash
+# Get overall summary
+./analyze.sh summary
+
+# Check TPS metrics
+./analyze.sh tps
+
+# View per-wallet stats
+./analyze.sh wallets
+
+# See all batches (if you ran multiple times)
+./analyze.sh batches
+```
+
+### Export Your Data
+
+```bash
+# Export to CSV for spreadsheet analysis
+./analyze.sh export
+
+# Opens interactive SQL shell
+./analyze.sh query
+```
+
+### Continue Learning
+
+1. **Try Different Configurations**
+   - Increase wallet count for more parallelism
+   - Test with different transaction volumes
+   - Compare performance across runs
+
+2. **Enable WebSocket**
+   ```bash
+   RPC_URL="http://localhost:8545" \
+   WS_URL="ws://localhost:8546" \
+   ./go-tps
+   ```
+
+3. **Try Loop Mode**
+   ```bash
+   RUN_DURATION_MINUTES=5 \
+   RPC_URL="http://localhost:8545" \
+   ./go-tps
+   ```
+
+4. **Read Advanced Documentation**
+   - Check [README.md](README.md) for advanced features
+   - Explore [claude.md](claude.md) for technical details
+   - Review [queries.sql](queries.sql) for custom analysis
+
+### Pro Tips
+
+- **Bookmark Your Mnemonic**: Save `mnemonic.txt` securely for reusing wallets
+- **Monitor Database Size**: `du -h transactions.db` to check storage
+- **Compare Batches**: Use batch numbers to track different test runs
+- **Backup Data**: `cp transactions.db backup_$(date +%Y%m%d).db`
+
+---
+
+**Need Help?** Check the [Troubleshooting](#troubleshooting) section above or open an issue on GitHub.
 
 Happy testing! 🚀

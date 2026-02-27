@@ -3,6 +3,17 @@
 ## Overview
 This project is a comprehensive Ethereum transaction performance testing tool written in Go. It generates wallets from mnemonics, creates and sends multiple transactions with precalculated nonces, and stores performance metrics in a SQLite database.
 
+## 📚 Documentation Files
+
+This project includes comprehensive documentation:
+
+- **[README.md](README.md)** - Main documentation with features, usage, and configuration
+- **[QUICKSTART.md](QUICKSTART.md)** - Quick start guide for new users
+- **[BATCH_TRACKING.md](BATCH_TRACKING.md)** - Batch tracking feature documentation
+- **[claude.md](claude.md)** - Technical deep-dive for developers and AI assistants
+- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - This file
+- **[queries.sql](queries.sql)** - Pre-written SQL queries for analysis
+
 ## Project Files
 
 ### Core Application Files
@@ -110,17 +121,19 @@ Dependency checksums for reproducible builds
 
 ### Documentation Files
 
-#### `README.md` (6.6 KB)
+#### `README.md` (6.6 KB → Now Enhanced)
 Comprehensive project documentation:
-- Feature overview
+- Feature overview with categorization
 - Installation instructions
 - Configuration options
-- Usage examples
+- Usage examples (basic and advanced)
 - Security warnings
 - Troubleshooting guide
 - Development guidelines
+- FAQ section
+- Roadmap
 
-#### `QUICKSTART.md` (4.9 KB)
+#### `QUICKSTART.md` (4.9 KB → Now Enhanced)
 Step-by-step guide for quick setup:
 - Prerequisites
 - Build instructions
@@ -128,6 +141,30 @@ Step-by-step guide for quick setup:
 - Configuration examples
 - Common workflows
 - Troubleshooting tips
+- Post-run analysis guide
+
+#### `claude.md` (NEW - ~50 KB)
+Comprehensive technical documentation for AI assistants and developers:
+- Complete architecture overview
+- Detailed code explanations
+- Data flow diagrams
+- API reference
+- Common tasks guide
+- Performance characteristics
+- Testing strategies
+- Troubleshooting guide
+- Future enhancement ideas
+
+#### `PROJECT_STRUCTURE.md` (This file)
+Project structure and file descriptions
+
+#### `BATCH_TRACKING.md` (7.5 KB)
+Batch tracking feature documentation:
+- Batch number format and usage
+- Benefits and use cases
+- SQL query examples
+- API reference
+- Integration with loop mode
 
 #### `queries.sql` (7.2 KB)
 Pre-written SQL queries for performance analysis:
@@ -312,6 +349,39 @@ Dependencies metadata: ~30 KB
 4. Run the tool
 5. Analyze results with analyze.sh or queries.sql
 
+## Documentation Summary
+
+### For Users
+- **Start here**: [QUICKSTART.md](QUICKSTART.md) - Get running in 10 minutes
+- **Reference**: [README.md](README.md) - Complete feature documentation
+- **Analysis**: `./analyze.sh` - Quick database queries
+
+### For Developers
+- **Technical Details**: [claude.md](claude.md) - Architecture and code deep-dive
+- **Project Layout**: [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) - This file
+- **Database Queries**: [queries.sql](queries.sql) - SQL examples
+
+### For Advanced Users
+- **Batch Tracking**: [BATCH_TRACKING.md](BATCH_TRACKING.md) - Multi-run analysis
+- **Custom Analysis**: [queries.sql](queries.sql) - Write your own queries
+- **Automation**: [Makefile](Makefile) - Build and run commands
+
+## Recent Updates
+
+### Documentation Enhancements (February 2026)
+- ✅ Added comprehensive [claude.md](claude.md) for technical deep-dive
+- ✅ Enhanced [README.md](README.md) with FAQ, roadmap, and advanced usage
+- ✅ Improved [QUICKSTART.md](QUICKSTART.md) with post-run guidance
+- ✅ Updated [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) with documentation index
+- ✅ Added cross-references between all documentation files
+
+### Feature Status
+- ✅ Batch tracking - Fully implemented
+- ✅ Loop mode - Fully implemented
+- ✅ WebSocket support - Fully implemented
+- ✅ Async receipt confirmation - Fully implemented
+- ✅ Comprehensive analysis tools - Fully implemented
+
 ---
 
-For questions or issues, refer to the main README.md or open an issue.
+For questions or issues, refer to the appropriate documentation file or open an issue on GitHub.
