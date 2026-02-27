@@ -607,7 +607,7 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 		// For failed receipts, use current time and update database
 		confirmedAt := time.Now()
 		execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
-		job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, execTime, receiptErr.Error())
+		job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, execTime, 0, "", receiptErr.Error())
 		logWarn("  [W%d] Tx (nonce %d): ✗ timeout/error - %v\n", job.WalletNum, job.Nonce, receiptErr)
 	} else {
 		// Get block header to retrieve block timestamp
@@ -624,11 +624,26 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 
 		execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
 
+		if execTime < 0 {
+			logWarn("  [W%d] Negative execution time calculated, setting to 0: %.2f ms\n", job.WalletNum, execTime)
+			execTime = 0
+			// start time + 1 second to avoid zero or negative execution time which can cause issues in stats calculations
+			// because block timestamp
+			confirmedAt = job.StartTime.Add(1 * time.Second)
+		}
+
+		// Extract gas information from receipt
+		gasUsed := receipt.GasUsed
+		effectiveGasPrice := ""
+		if receipt.EffectiveGasPrice != nil {
+			effectiveGasPrice = receipt.EffectiveGasPrice.String()
+		}
+
 		if receipt.Status == 1 {
-			job.DB.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, execTime, "")
-			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", job.WalletNum, job.Nonce, execTime/1000)
+			job.DB.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, execTime, gasUsed, effectiveGasPrice, "")
+			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", job.WalletNum, job.Nonce, execTime/1000, gasUsed)
 		} else {
-			job.DB.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, execTime, "transaction reverted")
+			job.DB.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, execTime, gasUsed, effectiveGasPrice, "transaction reverted")
 			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", job.WalletNum, job.Nonce)
 		}
 	}

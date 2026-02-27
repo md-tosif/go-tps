@@ -10,7 +10,7 @@ A Go-based tool for testing Ethereum network transaction throughput. This tool g
 - **[claude.md](claude.md)** - Comprehensive technical documentation for AI assistants
 - **[queries.sql](queries.sql)** - Pre-written SQL queries for analysis
 - **[scripts/analyze.sh](scripts/analyze.sh)** - Shell script for easy database analysis
-- **[scripts/graph_metrics.py](scripts/graph_metrics.py)** - Unified TPS and latency visualization tool
+- **[scripts/graph_metrics.py](scripts/graph_metrics.py)** - Unified TPS, latency, and gas price visualization tool
 
 ## 📑 Table of Contents
 
@@ -288,13 +288,17 @@ The tool generates several outputs:
 - `nonce`: Transaction nonce
 - `to_address`: Recipient address
 - `value`: Transaction value in wei
-- `gas_price`: Gas price in wei
-- `gas_limit`: Gas limit
+- `gas_price`: Gas price in wei (from transaction)
+- `gas_limit`: Gas limit (from transaction)
+- `gas_used`: Actual gas used (from receipt)
+- `effective_gas_price`: Effective gas price in wei (from receipt)
 - `status`: Transaction status (pending/success/failed)
 - `submitted_at`: Submission timestamp
 - `confirmed_at`: Confirmation timestamp
 - `execution_time`: Time to submit in milliseconds
 - `error`: Error message if failed
+
+**Note:** `gas_used` and `effective_gas_price` are populated after transaction confirmation.
 
 #### Wallets Table
 - `id`: Auto-incrementing primary key
@@ -358,7 +362,7 @@ pip3 install -r requirements.txt
 
 **Quick Start:**
 ```bash
-# Generate both TPS and Latency graphs
+# Generate all graphs (TPS, Latency, and Gas Price)
 ./graph.py
 
 # Or use the full path
@@ -379,10 +383,17 @@ pip3 install -r requirements.txt
    - Purple line: Confirmation Latency (time to mine)
    - Displays avg/min/max statistics
 
+3. **Gas Price Graph** - Transaction Costs
+   - Shows gas price behavior over time
+   - Blue line: Transaction Gas Price (Gwei) - gas price set when submitting
+   - Red line: Effective Gas Price (Gwei) - actual gas price paid from receipt
+   - Displays avg/min/max statistics for both prices
+   - Useful for analyzing EIP-1559 dynamics and transaction cost optimization
+
 **Features:**
 - Groups data into 1-second intervals for clear visualization
 - Interactive batch selection (recent or historical)
-- Choose specific graph type or generate both
+- Choose specific graph type or generate all
 - All graphs saved in `images/` folder
 - High-quality PNG output (300 DPI)
 
@@ -403,11 +414,13 @@ Selected batch: batch-20260226-143025
 Select graph type:
   1. TPS Graph (Transactions Per Second)
   2. Latency Graph (Transaction Timing)
-  3. Both Graphs
+  3. Gas Price Graph (Transaction vs Effective)
+  4. TPS + Latency Graphs
+  5. All Graphs (TPS + Latency + Gas Price)
 
-Enter choice (1-3, or press Enter for both): 
+Enter choice (1-5, or press Enter for all): 
 
-Generating both graphs...
+Generating all graphs...
 
 --- TPS Graph ---
 Calculating TPS intervals...
@@ -418,6 +431,11 @@ Generating graph...
 Calculating latency intervals...
 Generating graph...
 ✓ Latency graph saved to: images/latency_graph_batch-20260226-143025.png
+
+--- Gas Price Graph ---
+Calculating gas price intervals...
+Generating graph...
+✓ Gas price graph saved to: images/gas_price_graph_batch-20260226-143025.png
 
 Done! All graphs saved in the 'images/' directory.
 ```
@@ -452,7 +470,7 @@ go-tps/
 ├── scripts/             # Analysis and visualization tools
 │   ├── README.md        # Scripts documentation
 │   ├── analyze.sh       # Shell script for database analysis
-│   └── graph_metrics.py # Unified TPS & Latency graphing tool
+│   └── graph_metrics.py # Unified TPS, Latency & Gas Price graphing tool
 ├── analyze.sh           # Wrapper for scripts/analyze.sh
 ├── graph.py             # Wrapper for scripts/graph_metrics.py
 ├── images/              # Output folder for all generated graphs

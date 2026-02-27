@@ -17,7 +17,7 @@ from collections import defaultdict
 import statistics
 
 DB_PATH = "./transactions.db"
-INTERVAL_SECONDS = 1
+INTERVAL_SECONDS = 5
 OUTPUT_DIR = "images"
 
 
@@ -387,6 +387,174 @@ def generate_latency_graph(conn, batch_number):
     plot_latency_graph(execution_latency, confirmation_latency, batch_number)
 
 
+def calculate_gas_price_intervals(conn, batch_number=None):
+    """
+    Calculate average gas prices over 1-second intervals.
+    
+    Gas price: Price set when transaction was submitted
+    Effective gas price: Actual price paid (from receipt)
+    
+    Returns:
+        gas_price_avg: dict of {timestamp: avg_gas_price_gwei}
+        effective_gas_price_avg: dict of {timestamp: avg_effective_gas_price_gwei}
+    """
+    cursor = conn.cursor()
+    
+    # Query to get transaction and receipt gas prices
+    if batch_number:
+        query = """
+            SELECT submitted_at, gas_price, effective_gas_price, status
+            FROM transactions
+            WHERE batch_number = ?
+            ORDER BY submitted_at
+        """
+        cursor.execute(query, (batch_number,))
+    else:
+        query = """
+            SELECT submitted_at, gas_price, effective_gas_price, status
+            FROM transactions
+            ORDER BY submitted_at
+        """
+        cursor.execute(query)
+    
+    rows = cursor.fetchall()
+    
+    if not rows:
+        print("No transactions found.")
+        return {}, {}
+    
+    # Group gas prices by time intervals
+    gas_price_intervals = defaultdict(list)
+    effective_gas_price_intervals = defaultdict(list)
+    
+    for row in rows:
+        submitted_str, gas_price_str, effective_gas_price_str, status = row
+        
+        try:
+            submitted_dt = datetime.fromisoformat(submitted_str)
+            # Round down to nearest interval (INTERVAL_SECONDS)
+            interval_start = submitted_dt.replace(microsecond=0)
+            interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
+            
+            # Gas price from transaction (in wei, convert to gwei)
+            if gas_price_str:
+                try:
+                    gas_price_wei = int(gas_price_str)
+                    gas_price_gwei = gas_price_wei / 1e9
+                    gas_price_intervals[interval_start].append(gas_price_gwei)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Effective gas price from receipt (only for successful transactions)
+            if effective_gas_price_str and status == 'success':
+                try:
+                    effective_gas_price_wei = int(effective_gas_price_str)
+                    effective_gas_price_gwei = effective_gas_price_wei / 1e9
+                    effective_gas_price_intervals[interval_start].append(effective_gas_price_gwei)
+                except (ValueError, TypeError):
+                    pass
+        except (ValueError, TypeError):
+            continue
+    
+    # Calculate average gas price for each interval
+    gas_price_avg = {ts: statistics.mean(prices) if prices else 0 
+                     for ts, prices in gas_price_intervals.items()}
+    effective_gas_price_avg = {ts: statistics.mean(prices) if prices else 0 
+                               for ts, prices in effective_gas_price_intervals.items()}
+    
+    return gas_price_avg, effective_gas_price_avg
+
+
+def plot_gas_price_graph(gas_price_data, effective_gas_price_data, batch_number=None):
+    """Create and save the gas price graph."""
+    if not gas_price_data and not effective_gas_price_data:
+        print("No data to plot.")
+        return
+    
+    # Prepare data for plotting
+    all_times = sorted(set(list(gas_price_data.keys()) + list(effective_gas_price_data.keys())))
+    
+    gas_price_values = [gas_price_data.get(t, 0) for t in all_times]
+    effective_gas_price_values = [effective_gas_price_data.get(t, 0) for t in all_times]
+    
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(14, 7))
+    
+    # Plot both lines
+    ax.plot(all_times, gas_price_values, label='Transaction Gas Price', 
+            color='#2196F3', linewidth=2, marker='o', markersize=4)
+    ax.plot(all_times, effective_gas_price_values, label='Effective Gas Price (Receipt)',
+            color='#FF5722', linewidth=2, marker='s', markersize=4)
+    
+    # Formatting
+    ax.set_xlabel('Time', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Gas Price (Gwei)', fontsize=12, fontweight='bold')
+    
+    title = f'Gas Price Over Time ({INTERVAL_SECONDS}s intervals)'
+    if batch_number:
+        title += f'\nBatch: {batch_number}'
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+    
+    # Format x-axis
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    plt.xticks(rotation=45, ha='right')
+    
+    # Grid
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.set_axisbelow(True)
+    
+    # Legend
+    ax.legend(loc='best', fontsize=11, framealpha=0.9)
+    
+    # Add statistics text box
+    if gas_price_values or effective_gas_price_values:
+        stats_lines = []
+        
+        if gas_price_values and any(v > 0 for v in gas_price_values):
+            gas_values_filtered = [v for v in gas_price_values if v > 0]
+            gas_avg = statistics.mean(gas_values_filtered)
+            gas_min = min(gas_values_filtered)
+            gas_max = max(gas_values_filtered)
+            stats_lines.append(f'Transaction Gas:  Avg: {gas_avg:.2f} Gwei  |  Min: {gas_min:.2f} Gwei  |  Max: {gas_max:.2f} Gwei')
+        
+        if effective_gas_price_values and any(v > 0 for v in effective_gas_price_values):
+            eff_values_filtered = [v for v in effective_gas_price_values if v > 0]
+            eff_avg = statistics.mean(eff_values_filtered)
+            eff_min = min(eff_values_filtered)
+            eff_max = max(eff_values_filtered)
+            stats_lines.append(f'Effective Gas:    Avg: {eff_avg:.2f} Gwei  |  Min: {eff_min:.2f} Gwei  |  Max: {eff_max:.2f} Gwei')
+        
+        if stats_lines:
+            stats_text = '\n'.join(stats_lines)
+            ax.text(0.02, 0.98, stats_text,
+                    transform=ax.transAxes,
+                    fontsize=10,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    
+    plt.tight_layout()
+    
+    # Save the graph
+    ensure_output_dir()
+    output_file = os.path.join(OUTPUT_DIR, f'gas_price_graph_{batch_number if batch_number else "all"}.png')
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"✓ Gas price graph saved to: {output_file}")
+    
+    # Close the plot to free memory
+    plt.close()
+
+
+def generate_gas_price_graph(conn, batch_number):
+    """Generate Gas Price graph."""
+    print("\n--- Gas Price Graph ---")
+    print("Calculating gas price intervals...")
+    gas_price_data, effective_gas_price_data = calculate_gas_price_intervals(conn, batch_number)
+    
+    print("Generating graph...")
+    plot_gas_price_graph(gas_price_data, effective_gas_price_data, batch_number)
+
+
 def main():
     """Main function to generate graphs."""
     print("=== Transaction Metrics Graph Generator ===")
@@ -410,24 +578,34 @@ def main():
     print("\nSelect graph type:")
     print("  1. TPS Graph (Transactions Per Second)")
     print("  2. Latency Graph (Transaction Timing)")
-    print("  3. Both Graphs")
+    print("  3. Gas Price Graph (Transaction vs Effective)")
+    print("  4. TPS + Latency Graphs")
+    print("  5. All Graphs (TPS + Latency + Gas Price)")
     print()
     
     try:
-        graph_choice = input("Enter choice (1-3, or press Enter for both): ").strip()
+        graph_choice = input("Enter choice (1-5, or press Enter for all): ").strip()
         
-        if graph_choice == "" or graph_choice == "3":
-            print("\nGenerating both graphs...")
+        if graph_choice == "" or graph_choice == "5":
+            print("\nGenerating all graphs...")
             generate_tps_graph(conn, selected_batch)
             generate_latency_graph(conn, selected_batch)
+            generate_gas_price_graph(conn, selected_batch)
         elif graph_choice == "1":
             generate_tps_graph(conn, selected_batch)
         elif graph_choice == "2":
             generate_latency_graph(conn, selected_batch)
-        else:
-            print("Invalid choice. Generating both graphs...")
+        elif graph_choice == "3":
+            generate_gas_price_graph(conn, selected_batch)
+        elif graph_choice == "4":
+            print("\nGenerating TPS and Latency graphs...")
             generate_tps_graph(conn, selected_batch)
             generate_latency_graph(conn, selected_batch)
+        else:
+            print("Invalid choice. Generating all graphs...")
+            generate_tps_graph(conn, selected_batch)
+            generate_latency_graph(conn, selected_batch)
+            generate_gas_price_graph(conn, selected_batch)
     except (EOFError, KeyboardInterrupt):
         print("\nOperation cancelled.")
         conn.close()

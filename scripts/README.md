@@ -55,10 +55,16 @@ This is the main graphing tool that combines TPS and latency analysis in one con
    - Purple line: Confirmation Latency (ms) - time from submission to confirmation
    - Shows avg/min/max statistics
 
+3. **Gas Price Graph** (`images/gas_price_graph_*.png`)
+   - Blue line: Transaction Gas Price (Gwei) - gas price set when submitting
+   - Red line: Effective Gas Price (Gwei) - actual gas price paid from receipt
+   - Shows avg/min/max statistics for both prices
+   - Useful for analyzing EIP-1559 dynamics
+
 **Interactive Options:**
 - Select specific batch or all batches
-- Choose TPS, Latency, or both graphs
-- Press Enter for defaults (most recent batch, both graphs)
+- Choose TPS, Latency, Gas Price, or combinations
+- Press Enter for defaults (most recent batch, all graphs)
 
 **Requirements:**
 ```bash

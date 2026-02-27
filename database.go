@@ -10,20 +10,22 @@ import (
 )
 
 type Transaction struct {
-	ID            int64
-	BatchNumber   string
-	WalletAddress string
-	TxHash        string
-	Nonce         uint64
-	ToAddress     string
-	Value         string
-	GasPrice      string
-	GasLimit      uint64
-	Status        string
-	SubmittedAt   time.Time
-	ConfirmedAt   *time.Time
-	ExecutionTime float64 // in milliseconds
-	Error         string
+	ID                int64
+	BatchNumber       string
+	WalletAddress     string
+	TxHash            string
+	Nonce             uint64
+	ToAddress         string
+	Value             string
+	GasPrice          string
+	GasLimit          uint64
+	GasUsed           uint64
+	EffectiveGasPrice string
+	Status            string
+	SubmittedAt       time.Time
+	ConfirmedAt       *time.Time
+	ExecutionTime     float64 // in milliseconds
+	Error             string
 }
 
 type Database struct {
@@ -58,6 +60,8 @@ func createTables(db *sql.DB) error {
 		value TEXT NOT NULL,
 		gas_price TEXT NOT NULL,
 		gas_limit INTEGER NOT NULL,
+		gas_used INTEGER,
+		effective_gas_price TEXT,
 		status TEXT NOT NULL,
 		submitted_at TIMESTAMP NOT NULL,
 		confirmed_at TIMESTAMP,
@@ -91,9 +95,9 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 	query := `
 		INSERT INTO transactions (
 			batch_number, wallet_address, tx_hash, nonce, to_address, value, 
-			gas_price, gas_limit, status, submitted_at, confirmed_at, 
+			gas_price, gas_limit, gas_used, effective_gas_price, status, submitted_at, confirmed_at, 
 			execution_time, error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := d.db.Exec(query,
@@ -105,6 +109,8 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 		tx.Value,
 		tx.GasPrice,
 		tx.GasLimit,
+		tx.GasUsed,
+		tx.EffectiveGasPrice,
 		tx.Status,
 		tx.SubmittedAt,
 		tx.ConfirmedAt,
@@ -119,14 +125,14 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 	return result.LastInsertId()
 }
 
-func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *time.Time, executionTime float64, errMsg string) error {
+func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *time.Time, executionTime float64, gasUsed uint64, effectiveGasPrice string, errMsg string) error {
 	query := `
 		UPDATE transactions 
-		SET status = ?, confirmed_at = ?, execution_time = ?, error = ?
+		SET status = ?, confirmed_at = ?, execution_time = ?, gas_used = ?, effective_gas_price = ?, error = ?
 		WHERE tx_hash = ?
 	`
 
-	_, err := d.db.Exec(query, status, confirmedAt, executionTime, errMsg, txHash)
+	_, err := d.db.Exec(query, status, confirmedAt, executionTime, gasUsed, effectiveGasPrice, errMsg, txHash)
 	if err != nil {
 		return fmt.Errorf("failed to update transaction: %w", err)
 	}
