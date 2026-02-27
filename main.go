@@ -603,14 +603,27 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 	ctx := context.Background()
 	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, job.WSClient, common.HexToHash(job.TxHash), 60*time.Second)
 
-	// Update database with final status
-	confirmedAt := time.Now()
-	execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
-
 	if receiptErr != nil {
+		// For failed receipts, use current time and update database
+		confirmedAt := time.Now()
+		execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
 		job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, execTime, receiptErr.Error())
 		logWarn("  [W%d] Tx (nonce %d): ✗ timeout/error - %v\n", job.WalletNum, job.Nonce, receiptErr)
 	} else {
+		// Get block header to retrieve block timestamp
+		blockHeader, err := txSender.client.HeaderByHash(ctx, receipt.BlockHash)
+		var confirmedAt time.Time
+		if err != nil {
+			// Fallback to current time if block fetch fails
+			logWarn("  [W%d] Could not fetch block header, using current time: %v\n", job.WalletNum, err)
+			confirmedAt = time.Now()
+		} else {
+			// Use block creation time from the receipt's block
+			confirmedAt = time.Unix(int64(blockHeader.Time), 0)
+		}
+
+		execTime := confirmedAt.Sub(job.StartTime).Seconds() * 1000
+
 		if receipt.Status == 1 {
 			job.DB.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, execTime, "")
 			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs\n", job.WalletNum, job.Nonce, execTime/1000)
