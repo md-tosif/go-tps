@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"strings"
@@ -41,6 +42,40 @@ const (
 // Global logging configuration
 var currentLogLevel LogLevel = INFO
 
+// Per-level file loggers (nil until initLogFiles is called)
+var (
+	fileLoggers [4]*log.Logger // indexed by LogLevel: DEBUG=0, INFO=1, WARN=2, ERROR=3
+	logFiles    [4]*os.File
+)
+
+// initLogFiles creates the logs directory and opens one log file per level.
+// Each file is appended to across runs and contains a timestamp prefix per line.
+func initLogFiles() error {
+	if err := os.MkdirAll("logs", 0o755); err != nil {
+		return fmt.Errorf("could not create logs directory: %w", err)
+	}
+
+	names := [4]string{"logs/debug.log", "logs/info.log", "logs/warn.log", "logs/error.log"}
+	for i, name := range names {
+		f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("could not open %s: %w", name, err)
+		}
+		logFiles[i] = f
+		fileLoggers[i] = log.New(f, "", log.Ldate|log.Ltime|log.Lmicroseconds)
+	}
+	return nil
+}
+
+// closeLogFiles flushes and closes all open log files.
+func closeLogFiles() {
+	for _, f := range logFiles {
+		if f != nil {
+			f.Close()
+		}
+	}
+}
+
 // parseLogLevel converts string to LogLevel
 func parseLogLevel(level string) LogLevel {
 	switch strings.ToUpper(level) {
@@ -59,24 +94,36 @@ func parseLogLevel(level string) LogLevel {
 
 // Logging functions
 func logDebug(format string, args ...interface{}) {
+	if fileLoggers[DEBUG] != nil {
+		fileLoggers[DEBUG].Printf("[DEBUG] "+format, args...)
+	}
 	if currentLogLevel <= DEBUG {
 		fmt.Printf("[DEBUG] "+format, args...)
 	}
 }
 
 func logInfo(format string, args ...interface{}) {
+	if fileLoggers[INFO] != nil {
+		fileLoggers[INFO].Printf("[INFO] "+format, args...)
+	}
 	if currentLogLevel <= INFO {
 		fmt.Printf("[INFO] "+format, args...)
 	}
 }
 
 func logWarn(format string, args ...interface{}) {
+	if fileLoggers[WARN] != nil {
+		fileLoggers[WARN].Printf("[WARN] "+format, args...)
+	}
 	if currentLogLevel <= WARN {
 		fmt.Printf("[WARN] "+format, args...)
 	}
 }
 
 func logError(format string, args ...interface{}) {
+	if fileLoggers[ERROR] != nil {
+		fileLoggers[ERROR].Printf("[ERROR] "+format, args...)
+	}
 	if currentLogLevel <= ERROR {
 		fmt.Printf("[ERROR] "+format, args...)
 	}
@@ -110,6 +157,14 @@ type ReceiptJob struct {
 func main() {
 	fmt.Println("=== Ethereum TPS Tester ===")
 	fmt.Println()
+
+	// Initialise per-level log files (logs/debug.log, info.log, warn.log, error.log)
+	if err := initLogFiles(); err != nil {
+		fmt.Printf("Warning: could not initialise log files: %v\n", err)
+	} else {
+		defer closeLogFiles()
+		fmt.Println("✓ Log files initialised in logs/")
+	}
 
 	// Load .env file if it exists (optional)
 	if err := godotenv.Load(); err != nil {

@@ -92,6 +92,9 @@ func createTables(db *sql.DB) error {
 }
 
 func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	query := `
 		INSERT INTO transactions (
 			batch_number, wallet_address, tx_hash, nonce, to_address, value, 
@@ -126,6 +129,9 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 }
 
 func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *time.Time, gasUsed uint64, effectiveGasPrice string, errMsg string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	query := `
 		UPDATE transactions 
 		SET status = ?, confirmed_at = ?, gas_used = ?, effective_gas_price = ?, error = ?
@@ -141,6 +147,9 @@ func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *t
 }
 
 func (d *Database) InsertWallet(address, derivationPath string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	query := `
 		INSERT INTO wallets (address, derivation_path, created_at)
 		VALUES (?, ?, ?)
