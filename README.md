@@ -827,3 +827,17 @@ For questions, issues, or feature requests:
 ---
 
 **Happy Testing! 🚀**
+
+Simple Foundry `cast` command to fund a wallet from a local node (Anvil/Hardhat):
+
+```bash
+# Send 1 ETH from a funded account to a test wallet
+cast send \
+  --private-key  $FUNDER_PRIVATE_KEY \
+  --rpc-url  http://localhost:8545 \
+  0xRecipientAddress \
+  --value 10ether
+```
+
+Replace `0xRecipientAddress` with one of the generated wallet addresses and set `FUNDER_PRIVATE_KEY` to the private key of a funded account on your local node. You can also use other units like `0.1ether` or a value in wei (e.g., `1000000000000000000`).
+

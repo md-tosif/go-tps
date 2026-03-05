@@ -347,7 +347,13 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	receiptJobChan := make(chan ReceiptJob, config.WalletCount*config.TxPerWallet)
 	var receiptWG sync.WaitGroup
 	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG)
-	logInfo("📋 Started %d receipt confirmation workers\n\n", config.ReceiptWorkers)
+	logInfo("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
+
+	// Create DB writer worker pool (single worker keeps SQLite write-serialized)
+	dbWriteChan := make(chan *Transaction, config.WalletCount*config.TxPerWallet)
+	var dbWriteWG sync.WaitGroup
+	startDBWriterPool(config.ReceiptWorkers, dbWriteChan, db, &dbWriteWG)
+	logInfo("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
 
 	// Parse configuration values
 	value := new(big.Int)
@@ -427,18 +433,14 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					// Print failure reason
 					logError("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
 
-					// Save to database (mutex protected)
-					if _, err := db.InsertTransaction(dbTx); err != nil {
-						logWarn("  Could not save failed transaction to DB: %v\n", err)
-					}
+					// Queue DB write via worker channel
+					dbWriteChan <- dbTx
 				} else {
 					dbTx.TxHash = result.TxHash
 					dbTx.Status = "pending"
 
-					// Save to database (mutex protected)
-					if _, err := db.InsertTransaction(dbTx); err != nil {
-						logWarn("  Could not save transaction to DB: %v\n", err)
-					}
+					// Queue DB write via worker channel
+					dbWriteChan <- dbTx
 
 					logDebug("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
 
@@ -473,9 +475,13 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		fmt.Println("\nWaiting for all transactions to be submitted...")
 		wgSubmit.Wait()
 		fmt.Println("✓ All transactions submitted")
+
+		// All wallet goroutines are done sending DB jobs; drain the writer pool
+		close(dbWriteChan)
+		dbWriteWG.Wait()
 		fmt.Println("✓ All transactions saved to database")
 
-		// Close the receipt job channel now that all jobs are submitted
+		// Now safe to close the receipt job channel
 		close(receiptJobChan)
 		fmt.Println("Note: Receipt confirmations are happening in background")
 
@@ -555,6 +561,25 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 
 	// Return immediately - submissions and confirmations happen in background
 	fmt.Println("\n✓ Transaction submission launched in background")
+}
+
+// startDBWriterPool starts a pool of workers that serialize inserts into SQLite.
+// Use workerCount=1 to avoid "database is locked" errors with SQLite.
+func startDBWriterPool(workerCount int, jobChan <-chan *Transaction, db *Database, wg *sync.WaitGroup) {
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go dbWriterWorker(i+1, jobChan, db, wg)
+	}
+}
+
+// dbWriterWorker drains the DB write channel, inserting each transaction record.
+func dbWriterWorker(workerID int, jobChan <-chan *Transaction, db *Database, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for tx := range jobChan {
+		if _, err := db.InsertTransaction(tx); err != nil {
+			logWarn("[DBWriter %d] Could not save transaction to DB: %v\n", workerID, err)
+		}
+	}
 }
 
 // startReceiptWorkerPool starts a pool of workers to process receipt confirmations
