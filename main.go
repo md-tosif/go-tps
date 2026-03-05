@@ -305,11 +305,13 @@ func main() {
 	fmt.Println("\n✓ User confirmed. Proceeding with transactions...")
 	fmt.Println()
 
+	var receiptWG sync.WaitGroup // WaitGroup for receipt confirmations
+
 	// Check if we should run in loop mode
 	if config.RunDurationMinutes > 0 {
 		fmt.Printf("Running in LOOP MODE for %d minutes\n", config.RunDurationMinutes)
 		fmt.Println()
-		runInLoopMode(config, db, txSender, wsClient, wallets)
+		runInLoopMode(config, db, txSender, wsClient, wallets, &receiptWG)
 	} else {
 		fmt.Println("Running in SINGLE MODE")
 		fmt.Println()
@@ -317,7 +319,7 @@ func main() {
 		// Record start time for single execution
 		executionStart := time.Now()
 
-		runSingleExecution(config, db, txSender, wsClient, wallets)
+		runSingleExecution(config, db, txSender, wsClient, wallets, &receiptWG)
 
 		// Calculate elapsed time and ensure minimum 1 second
 		executionElapsed := time.Since(executionStart)
@@ -333,9 +335,10 @@ func main() {
 		}
 	}
 
-	// sleep for 10 seconds before creating summary to allow any pending receipt confirmations to finish
 	fmt.Println("\nWaiting a few seconds for any pending receipt confirmations to finish...")
-	time.Sleep(60 * time.Second)
+	receiptWG.Wait() // Wait for all receipt confirmations to finish
+	// sleep for 10 seconds before creating summary to allow any pending receipt confirmations to finish
+	// time.Sleep(60 * time.Second)
 
 	// Final summary
 	fmt.Println()
@@ -346,7 +349,7 @@ func main() {
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wsClient *ethclient.Client, wallets []*Wallet) {
+func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wsClient *ethclient.Client, wallets []*Wallet, wg *sync.WaitGroup) {
 	duration := time.Duration(config.RunDurationMinutes) * time.Minute
 	startTime := time.Now()
 	endTime := startTime.Add(duration)
@@ -365,7 +368,7 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, ws
 		// Record start time for this iteration
 		iterationStart := time.Now()
 
-		runSingleExecution(config, db, txSender, wsClient, wallets)
+		runSingleExecution(config, db, txSender, wsClient, wallets, wg)
 
 		// Calculate elapsed time and ensure minimum 1 second per iteration
 		iterationElapsed := time.Since(iterationStart)
@@ -391,7 +394,7 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, ws
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wsClient *ethclient.Client, wallets []*Wallet) {
+func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wsClient *ethclient.Client, wallets []*Wallet, wg *sync.WaitGroup) {
 	// Generate unique batch number for this execution
 	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
 	fmt.Printf("Batch Number: %s\n\n", batchNumber)
@@ -400,8 +403,8 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 
 	// Create receipt worker pool
 	receiptJobChan := make(chan ReceiptJob, config.WalletCount*config.TxPerWallet)
-	var receiptWG sync.WaitGroup
-	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG)
+
+	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, wg)
 	logInfo("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
 
 	// Create DB writer worker pool (single worker keeps SQLite write-serialized)
@@ -501,6 +504,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 
 					mu.Lock()
 					totalTransactions++
+					totalSuccessful++
 					mu.Unlock()
 
 					// Send job to receipt worker pool (non-blocking)

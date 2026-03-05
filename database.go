@@ -383,3 +383,34 @@ func (d *Database) GetFailedTransactions(batchNumber string, limit int) ([]map[s
 func (d *Database) Close() error {
 	return d.db.Close()
 }
+
+// GetPendingCount returns the number of transactions still in "pending" status.
+func (d *Database) GetPendingCount() (int, error) {
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM transactions WHERE status = 'pending'").Scan(&count)
+	return count, err
+}
+
+// GetPendingTransactions returns all transactions still in "pending" status.
+func (d *Database) GetPendingTransactions() ([]*Transaction, error) {
+	rows, err := d.db.Query(`
+		SELECT tx_hash, nonce, submitted_at
+		FROM transactions
+		WHERE status = 'pending' AND tx_hash IS NOT NULL AND tx_hash != ''
+		ORDER BY submitted_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var txns []*Transaction
+	for rows.Next() {
+		tx := &Transaction{}
+		if err := rows.Scan(&tx.TxHash, &tx.Nonce, &tx.SubmittedAt); err != nil {
+			return nil, err
+		}
+		txns = append(txns, tx)
+	}
+	return txns, rows.Err()
+}
