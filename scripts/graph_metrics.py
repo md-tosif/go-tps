@@ -8,6 +8,7 @@ over 1-second intervals from the transactions database.
 import sqlite3
 import sys
 import os
+import re
 from datetime import datetime, timedelta
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
@@ -16,7 +17,19 @@ import matplotlib.dates as mdates
 from collections import defaultdict
 import statistics
 
-DB_PATH = "./transactions.db"
+
+def parse_timestamp(ts_str):
+    """Parse timestamp string that may have nanosecond precision or timezone info.
+    Python datetime only supports up to microseconds (6 decimal places).
+    Truncates excess fractional digits before parsing.
+    """
+    if not ts_str:
+        return None
+    # Truncate fractional seconds beyond 6 digits (nanoseconds -> microseconds)
+    ts_str = re.sub(r'(\.\d{6})\d+', r'\1', ts_str)
+    return datetime.fromisoformat(ts_str)
+
+DB_PATH = "./load-2.db"
 INTERVAL_SECONDS = 5
 OUTPUT_DIR = "images"
 
@@ -78,7 +91,7 @@ def calculate_tps_intervals(conn, batch_number=None):
         
         # Parse submission time
         try:
-            submitted_dt = datetime.fromisoformat(submitted_str)
+            submitted_dt = parse_timestamp(submitted_str)
             # Round down to nearest 1-second interval
             interval_start = submitted_dt.replace(microsecond=0)
             interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
@@ -89,7 +102,7 @@ def calculate_tps_intervals(conn, batch_number=None):
         # Parse confirmation time (if available and successful)
         if confirmed_str and status == 'success':
             try:
-                confirmed_dt = datetime.fromisoformat(confirmed_str)
+                confirmed_dt = parse_timestamp(confirmed_str)
                 # Round down to nearest interval (INTERVAL_SECONDS)
                 interval_start = confirmed_dt.replace(microsecond=0)
                 interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
@@ -148,7 +161,7 @@ def calculate_latency_intervals(conn, batch_number=None):
         submitted_str, confirmed_str, exec_time, status = row
         
         try:
-            submitted_dt = datetime.fromisoformat(submitted_str)
+            submitted_dt = parse_timestamp(submitted_str)
             # Round down to nearest interval (INTERVAL_SECONDS)
             interval_start = submitted_dt.replace(microsecond=0)
             interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
@@ -160,7 +173,7 @@ def calculate_latency_intervals(conn, batch_number=None):
             # Confirmation latency (time from submission to confirmation)
             if confirmed_str and status == 'success':
                 try:
-                    confirmed_dt = datetime.fromisoformat(confirmed_str)
+                    confirmed_dt = parse_timestamp(confirmed_str)
                     confirmation_latency_ms = (confirmed_dt - submitted_dt).total_seconds() * 1000
                     if confirmation_latency_ms > 0:
                         confirmation_intervals[interval_start].append(confirmation_latency_ms)
@@ -222,10 +235,13 @@ def plot_tps_graph(submission_tps, confirmation_tps, batch_number=None):
     
     # Add statistics text box
     if submission_values:
-        sub_avg = sum(submission_values) / len(submission_values)
-        sub_max = max(submission_values)
-        conf_avg = sum(confirmation_values) / len(confirmation_values) if confirmation_values else 0
-        conf_max = max(confirmation_values) if confirmation_values else 0
+        # Use only non-zero intervals to avoid averaging in idle periods
+        sub_nonzero = [v for v in submission_values if v > 0]
+        sub_avg = sum(sub_nonzero) / len(sub_nonzero) if sub_nonzero else 0
+        sub_max = max(sub_nonzero) if sub_nonzero else 0
+        conf_nonzero = [v for v in confirmation_values if v > 0]
+        conf_avg = sum(conf_nonzero) / len(conf_nonzero) if conf_nonzero else 0
+        conf_max = max(conf_nonzero) if conf_nonzero else 0
         
         stats_text = f'Submission:  Avg: {sub_avg:.2f} TPS  |  Max: {sub_max:.2f} TPS\n'
         stats_text += f'Confirmation: Avg: {conf_avg:.2f} TPS  |  Max: {conf_max:.2f} TPS'
@@ -426,12 +442,14 @@ def calculate_gas_price_intervals(conn, batch_number=None):
     # Group gas prices by time intervals
     gas_price_intervals = defaultdict(list)
     effective_gas_price_intervals = defaultdict(list)
+    all_gas_prices = []       # raw values for global stats
+    all_effective_prices = [] # raw values for global stats
     
     for row in rows:
         submitted_str, gas_price_str, effective_gas_price_str, status = row
         
         try:
-            submitted_dt = datetime.fromisoformat(submitted_str)
+            submitted_dt = parse_timestamp(submitted_str)
             # Round down to nearest interval (INTERVAL_SECONDS)
             interval_start = submitted_dt.replace(microsecond=0)
             interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)
@@ -442,6 +460,7 @@ def calculate_gas_price_intervals(conn, batch_number=None):
                     gas_price_wei = int(gas_price_str)
                     gas_price_gwei = gas_price_wei / 1e9
                     gas_price_intervals[interval_start].append(gas_price_gwei)
+                    all_gas_prices.append(gas_price_gwei)
                 except (ValueError, TypeError):
                     pass
             
@@ -451,6 +470,7 @@ def calculate_gas_price_intervals(conn, batch_number=None):
                     effective_gas_price_wei = int(effective_gas_price_str)
                     effective_gas_price_gwei = effective_gas_price_wei / 1e9
                     effective_gas_price_intervals[interval_start].append(effective_gas_price_gwei)
+                    all_effective_prices.append(effective_gas_price_gwei)
                 except (ValueError, TypeError):
                     pass
         except (ValueError, TypeError):
@@ -462,32 +482,42 @@ def calculate_gas_price_intervals(conn, batch_number=None):
     effective_gas_price_avg = {ts: statistics.mean(prices) if prices else 0 
                                for ts, prices in effective_gas_price_intervals.items()}
     
-    return gas_price_avg, effective_gas_price_avg
+    return gas_price_avg, effective_gas_price_avg, all_gas_prices, all_effective_prices
 
 
-def plot_gas_price_graph(gas_price_data, effective_gas_price_data, batch_number=None):
+def plot_gas_price_graph(gas_price_data, effective_gas_price_data, all_gas_prices=None, all_effective_prices=None, batch_number=None):
     """Create and save the gas price graph."""
-    if not effective_gas_price_data:
-        print("No effective gas price data to plot.")
+    if not gas_price_data and not effective_gas_price_data:
+        print("No gas price data to plot.")
         return
     
-    # Prepare data for plotting
-    all_times = sorted(effective_gas_price_data.keys())
+    # Prepare data for plotting — use submitted gas_price if effective not available
+    has_effective = bool(effective_gas_price_data)
+    has_submitted = bool(gas_price_data)
     
+    all_times = sorted(set(list(gas_price_data.keys()) + list(effective_gas_price_data.keys())))
+    
+    submitted_values = [gas_price_data.get(t, 0) for t in all_times]
     effective_gas_price_values = [effective_gas_price_data.get(t, 0) for t in all_times]
     
     # Create the plot
     fig, ax = plt.subplots(figsize=(14, 7))
     
-    # Plot effective gas price line only
-    ax.plot(all_times, effective_gas_price_values, label='Effective Gas Price',
-            color='#FF5722', linewidth=2, marker='o', markersize=4)
+    # Plot submitted gas price
+    if has_submitted:
+        ax.plot(all_times, submitted_values, label='Submitted Gas Price',
+                color='#2196F3', linewidth=2, marker='o', markersize=4)
+    
+    # Plot effective gas price
+    if has_effective:
+        ax.plot(all_times, effective_gas_price_values, label='Effective Gas Price',
+                color='#FF5722', linewidth=2, marker='s', markersize=4)
     
     # Formatting
     ax.set_xlabel('Time', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Effective Gas Price (Gwei)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Gas Price (Gwei)', fontsize=12, fontweight='bold')
     
-    title = f'Effective Gas Price Over Time ({INTERVAL_SECONDS}s intervals)'
+    title = f'Gas Price Over Time ({INTERVAL_SECONDS}s intervals)'
     if batch_number:
         title += f'\nBatch: {batch_number}'
     ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
@@ -504,14 +534,25 @@ def plot_gas_price_graph(gas_price_data, effective_gas_price_data, batch_number=
     # Legend
     ax.legend(loc='best', fontsize=11, framealpha=0.9)
     
-    # Add statistics text box
-    if effective_gas_price_values and any(v > 0 for v in effective_gas_price_values):
-        eff_values_filtered = [v for v in effective_gas_price_values if v > 0]
-        eff_avg = statistics.mean(eff_values_filtered)
-        eff_min = min(eff_values_filtered)
-        eff_max = max(eff_values_filtered)
-        
-        stats_text = f'Avg: {eff_avg:.2f} Gwei  |  Min: {eff_min:.2f} Gwei  |  Max: {eff_max:.2f} Gwei'
+    # Add statistics text box — use raw per-transaction values for accurate min/max
+    stats_lines = []
+    raw_submitted = all_gas_prices if all_gas_prices else [v for v in submitted_values if v > 0]
+    raw_effective = all_effective_prices if all_effective_prices else [v for v in effective_gas_price_values if v > 0]
+    
+    if raw_submitted:
+        s_avg = statistics.mean(raw_submitted)
+        s_min = min(raw_submitted)
+        s_max = max(raw_submitted)
+        stats_lines.append(f'Submitted:  Avg: {s_avg:.4f} Gwei  |  Min: {s_min:.4f} Gwei  |  Max: {s_max:.4f} Gwei')
+    
+    if raw_effective:
+        e_avg = statistics.mean(raw_effective)
+        e_min = min(raw_effective)
+        e_max = max(raw_effective)
+        stats_lines.append(f'Effective:  Avg: {e_avg:.4f} Gwei  |  Min: {e_min:.4f} Gwei  |  Max: {e_max:.4f} Gwei')
+    
+    if stats_lines:
+        stats_text = '\n'.join(stats_lines)
         ax.text(0.02, 0.98, stats_text,
                 transform=ax.transAxes,
                 fontsize=10,
@@ -534,10 +575,10 @@ def generate_gas_price_graph(conn, batch_number):
     """Generate Gas Price graph."""
     print("\n--- Gas Price Graph ---")
     print("Calculating gas price intervals...")
-    gas_price_data, effective_gas_price_data = calculate_gas_price_intervals(conn, batch_number)
+    gas_price_data, effective_gas_price_data, all_gas_prices, all_effective_prices = calculate_gas_price_intervals(conn, batch_number)
     
     print("Generating graph...")
-    plot_gas_price_graph(gas_price_data, effective_gas_price_data, batch_number)
+    plot_gas_price_graph(gas_price_data, effective_gas_price_data, all_gas_prices, all_effective_prices, batch_number)
 
 
 def calculate_gas_used_intervals(conn, batch_number=None):
@@ -580,7 +621,7 @@ def calculate_gas_used_intervals(conn, batch_number=None):
         submitted_str, gas_used, status = row
         
         try:
-            submitted_dt = datetime.fromisoformat(submitted_str)
+            submitted_dt = parse_timestamp(submitted_str)
             # Round down to nearest interval (INTERVAL_SECONDS)
             interval_start = submitted_dt.replace(microsecond=0)
             interval_start = interval_start - timedelta(seconds=interval_start.second % INTERVAL_SECONDS)

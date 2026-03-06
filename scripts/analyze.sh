@@ -76,17 +76,29 @@ EOF
 }
 
 performance() {
-    echo "=== PERFORMANCE METRICS ==="
+    echo "=== EXECUTION METRICS ==="
     sqlite3 "$DB_PATH" -header -column <<EOF
 SELECT 
     status,
     COUNT(*) as count,
-    ROUND(AVG(execution_time), 2) as avg_ms,
-    ROUND(MIN(execution_time), 2) as min_ms,
-    ROUND(MAX(execution_time), 2) as max_ms
+    ROUND(AVG(execution_time), 2) as avg_execution_ms,
+    ROUND(MIN(execution_time), 2) as min_execution_ms,
+    ROUND(MAX(execution_time), 2) as max_execution_ms
 FROM transactions
 WHERE execution_time > 0
 GROUP BY status;
+EOF
+
+    echo ""
+    echo "=== CONFIRMATION TIMES ==="
+    sqlite3 "$DB_PATH" -header -column <<EOF
+SELECT 
+    COUNT(*) as confirmed_count,
+    ROUND(AVG((JULIANDAY(confirmed_at) - JULIANDAY(submitted_at)) * 86400 * 1000), 2) as avg_confirm_ms,
+    ROUND(MIN((JULIANDAY(confirmed_at) - JULIANDAY(submitted_at)) * 86400 * 1000), 2) as min_confirm_ms,
+    ROUND(MAX((JULIANDAY(confirmed_at) - JULIANDAY(submitted_at)) * 86400 * 1000), 2) as max_confirm_ms
+FROM transactions
+WHERE status = 'success' AND confirmed_at IS NOT NULL;
 EOF
 }
 
