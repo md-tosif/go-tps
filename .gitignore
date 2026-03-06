@@ -54,3 +54,5 @@ images/
 
 # Dependency directories
 vendor/
+
+*.xlsx
