@@ -1,19 +1,19 @@
 # Quick Start Guide
 
-Get up and running with go-tps in under 10 minutes!
+Get up and running with go-tps in under 10 minutes.
 
-## 📚 Additional Resources
+## Additional Resources
 
-Before starting, check out these resources:
-- **[README.md](README.md)** - Comprehensive documentation
-- **[claude.md](claude.md)** - Technical deep-dive for developers
-- **[BATCH_TRACKING.md](BATCH_TRACKING.md)** - Understanding batch tracking
-- **[queries.sql](queries.sql)** - Analysis query examples
+- [README.md](README.md) — Full documentation
+- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) — File-by-file reference
+- [queries.sql](queries.sql) — SQL analysis examples
+- [scripts/README.md](scripts/README.md) — Graphing and analysis tools
+- [claude.md](claude.md) — Deep technical reference
 
 ## Prerequisites
-- Go 1.19+ installed
-- An Ethereum RPC endpoint (local testnet recommended)
-- Funded wallets (the tool generates new wallets that need ETH)
+- Go 1.19 or higher (module compiled with go 1.25.2)
+- An Ethereum RPC endpoint (local testnet recommended for initial testing)
+- ETH-funded wallets — the tool generates new wallets that need ETH for gas
 
 ## Step 1: Build the Project
 ```bash

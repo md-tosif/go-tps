@@ -1,278 +1,193 @@
 # Go-TPS Project Structure
 
 ## Overview
-This project is a comprehensive Ethereum transaction performance testing tool written in Go. It generates wallets from mnemonics, creates and sends multiple transactions with precalculated nonces, and stores performance metrics in a SQLite database.
 
-## 📚 Documentation Files
+go-tps is an Ethereum transaction throughput benchmarking tool written in Go. It derives multiple wallets from a BIP39 mnemonic, submits batched transactions with pre-calculated nonces in parallel, and stores performance metrics in a SQLite database.
 
-This project includes comprehensive documentation:
+## Documentation
 
-- **[README.md](README.md)** - Main documentation with features, usage, and configuration
-- **[QUICKSTART.md](QUICKSTART.md)** - Quick start guide for new users
-- **[BATCH_TRACKING.md](BATCH_TRACKING.md)** - Batch tracking feature documentation
-- **[claude.md](claude.md)** - Technical deep-dive for developers and AI assistants
-- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - This file
-- **[queries.sql](queries.sql)** - Pre-written SQL queries for analysis
+| File | Purpose |
+|------|---------|
+| [README.md](README.md) | Full feature reference, configuration, usage examples |
+| [QUICKSTART.md](QUICKSTART.md) | Step-by-step getting-started guide |
+| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | This file |
+| [queries.sql](queries.sql) | Pre-written SQL analysis queries |
+| [scripts/README.md](scripts/README.md) | Analysis and graphing script reference |
+| [claude.md](claude.md) | Deep technical reference for developers/AI |
 
-## Project Files
+---
 
-### Core Application Files
+## Source Files
 
-#### `main.go` (7.1 KB)
-The main entry point of the application. Contains:
-- Configuration loading from environment variables
-- Orchestration of wallet generation
-- Transaction batch creation and sending
-- Performance metrics collection and reporting
-- Database operations coordination
+### `main.go`
+Application entry point. Responsibilities:
+- Load config from environment variables (with `.env` file support)
+- Initialise four per-level log files in `logs/`
+- Connect to RPC and optionally WebSocket
+- Derive wallets, display balances, prompt for confirmation
+- Launch a **DB writer pool** to serialise SQLite inserts (preventing lock contention) and dispatch receipt jobs only _after_ each INSERT succeeds
+- Launch a **receipt worker pool** of long-lived goroutines that each reuse one RPC connection; workers retry timed-out receipts up to 3 times before marking a transaction failed
+- Process all wallets in parallel (`sync.WaitGroup`), pre-calculate nonces locally, and queue `DBWriteJob`s
+- Loop mode: repeat execution for a configurable duration with a unique batch number per iteration
 
-**Key Features:**
-- Configurable via environment variables
-- Generates and saves mnemonics
-- Manages the complete transaction lifecycle
-- Provides real-time progress updates
-- Calculates and displays performance statistics
+**Key types / functions:**
+- `Config` struct + `LoadConfig()` — all configuration
+- `ReceiptJob` / `DBWriteJob` — worker job types
+- `startDBWriterPool()` / `dbWriterWorker()` — serialised DB inserts
+- `startReceiptWorkerPool()` / `receiptWorker()` / `processReceiptJob()` — async receipt confirmation
+- `runSingleExecution()` / `runInLoopMode()` — execution modes
+- `logDebug/logInfo/logWarn/logError()` — log to both console and per-level files
 
-#### `wallet.go` (3.0 KB)
-Handles all wallet-related operations:
-- BIP39 mnemonic generation (12-word phrases)
-- HD wallet derivation using BIP44 standard (m/44'/60'/0'/0/x)
-- Multiple wallet generation from mnemonics
-- Private key and address management
+### `wallet.go`
+Wallet derivation and key management.
+- `GenerateMnemonic()` — creates a 128-bit BIP39 mnemonic (12 words)
+- `DeriveWalletsFromMnemonic(mnemonic, count, txSender)` — derives wallets via BIP44 (`m/44'/60'/0'/0/i`); when `txSender` is non-nil, each wallet's current pending nonce is pre-fetched from the RPC during derivation
+- `CreateWalletsFromMultipleMnemonics()` — utility for generating wallets from several mnemonics
+- `Wallet` struct — holds `Address`, `PrivateKey`, `DerivationPath`, and pre-fetched `Nonce`
 
-**Key Functions:**
-- `GenerateMnemonic()` - Creates new BIP39 mnemonic
-- `DeriveWalletsFromMnemonic()` - Derives multiple wallets from one mnemonic
-- `CreateWalletsFromMultipleMnemonics()` - Generates wallets from multiple mnemonics
+### `transaction.go`
+Transaction creation, signing, sending, and receipt waiting.
+- `TransactionSender` — wraps an `ethclient.Client` + chain ID
+- `PrepareBatchTransactions()` — builds `TxRequest` slice using locally-incremented nonces from `wallet.Nonce`; fetches gas price once per batch
+- `CreateAndSendTransaction()` — creates, signs (EIP-155), and sends a transaction; returns `TxResult` with submission time and latency
+- `WaitForReceipt()` — RPC polling fallback
+- `WaitForReceiptWithSharedWebSocket()` — runs WebSocket block subscription and RPC polling in parallel; first result wins
 
-#### `transaction.go` (4.5 KB)
-Manages Ethereum transaction creation and sending:
-- Transaction creation with custom parameters
-- Transaction signing using EIP-155
-- Nonce management and precalculation
-- RPC connection management
-- Batch transaction preparation
+### `database.go`
+SQLite persistence layer.
+- `Database` struct with a `sync.Mutex` protecting all write operations
+- `InsertTransaction()` — stores a new record with status `pending`
+- `UpdateTransactionStatus()` — sets `status`, `confirmed_at`, `gas_used`, `effective_gas_price` after confirmation
+- `GetTransactionStats()` / `GetBatchStats()` — summary and per-batch statistics
+- `CalculateTPS()` — computes submission-window and confirmation-window TPS
+- `GetFailedTransactions()` — retrieves recent failures for the post-run summary
+- Schema: `transactions` table (with indexes on `batch_number`, `wallet_address`, `tx_hash`, `status`, `submitted_at`) + `wallets` table
 
-**Key Components:**
-- `TransactionSender` - Main struct for handling transactions
-- `PrepareBatchTransactions()` - Precalculates nonces for batch sending
-- `CreateAndSendTransaction()` - Complete transaction lifecycle
-- `SendMultipleTransactions()` - Batch transaction sender
+---
 
-#### `database.go` (4.2 KB)
-SQLite database operations for performance tracking:
-- Schema creation and management
-- Transaction record storage
-- Wallet information storage
-- Performance statistics queries
+## Configuration
 
-**Database Tables:**
-1. `transactions` - Stores all transaction details and metrics
-2. `wallets` - Stores wallet addresses and derivation paths
+### `.env.example`
+Template for all environment variables. Copy to `.env` and edit:
+```
+RPC_URL=http://localhost:8545
+WS_URL=
+DB_PATH=./transactions.db
+MNEMONIC=
+WALLET_COUNT=10
+TX_PER_WALLET=10
+VALUE_WEI=1000000000000000
+TO_ADDRESS=0x0000000000000000000000000000000000000001
+RUN_DURATION_MINUTES=0
+RECEIPT_WORKERS=10
+LOG_LEVEL=DEBUG
+```
 
-**Key Features:**
-- Automatic schema initialization
-- Indexed queries for performance
-- Transaction status tracking
-- Execution time recording
+### `.gitignore`
+Excludes: compiled binary, `*.db` files, `mnemonic.txt`, `.env`, `logs/`, `images/`.
 
-### Configuration Files
+---
 
-#### `.env.example` (716 B)
-Template environment configuration file with all available options:
-- RPC_URL - Ethereum RPC endpoint
-- DB_PATH - SQLite database location
-- MNEMONIC_COUNT - Number of mnemonics to generate
-- WALLETS_PER_MNEMONIC - Wallets per mnemonic
-- TX_PER_WALLET - Transactions per wallet
-- VALUE_WEI - Transaction value in wei
-- TO_ADDRESS - Recipient address
+## Build and Automation
 
-#### `.gitignore` (446 B)
-Git ignore rules to prevent committing:
-- Compiled binaries
-- Database files
-- Sensitive data (mnemonics, keys)
-- IDE configuration files
-- Log files
+### `Makefile`
+| Target | Action |
+|--------|--------|
+| `make build` | Compile `go-tps` binary |
+| `make run` | Build and run with defaults |
+| `make run-local` | Build and run against `http://localhost:8545` |
+| `make clean` | Remove binary, `*.db`, `mnemonic.txt` |
+| `make test` | `go test ./...` |
+| `make fmt` | `go fmt ./...` |
+| `make install` | `go mod download && go mod tidy` |
+| `make build-all` | Cross-compile for Linux, macOS, Windows |
 
-### Build and Automation Files
+### `go.mod` / `go.sum`
+Module definition (`go 1.25.2`) and checksums. Direct dependencies:
+- `github.com/ethereum/go-ethereum v1.17.0`
+- `github.com/mattn/go-sqlite3 v1.14.34` (requires CGo)
+- `github.com/miguelmota/go-ethereum-hdwallet v0.1.3`
+- `github.com/tyler-smith/go-bip39 v1.1.0`
+- `github.com/joho/godotenv v1.5.1`
 
-#### `Makefile` (1.8 KB)
-Build automation and common commands:
-- `make build` - Build the project
-- `make run` - Build and run with defaults
-- `make run-local` - Run with local RPC
-- `make clean` - Remove build artifacts and database
-- `make test` - Run tests
-- `make fmt` - Format code
-- `make install` - Install/update dependencies
-- `make build-all` - Cross-platform builds
+---
 
-#### `go.mod` (1.9 KB)
-Go module definition with dependencies:
-- github.com/ethereum/go-ethereum - Ethereum client library
-- github.com/mattn/go-sqlite3 - SQLite driver
-- github.com/tyler-smith/go-bip39 - BIP39 mnemonic implementation
-- github.com/miguelmota/go-ethereum-hdwallet - HD wallet support
+## Documentation
 
-#### `go.sum` (28 KB)
-Dependency checksums for reproducible builds
+| File | Contents |
+|------|----------|
+| `README.md` | Full feature reference, config table, schema, how-it-works, troubleshooting |
+| `QUICKSTART.md` | Step-by-step setup guide for new users |
+| `PROJECT_STRUCTURE.md` | This file |
+| `queries.sql` | ~10 categories of pre-written SQL analysis queries |
+| `claude.md` | Architecture diagrams, API reference, data-flow, task guide for developers/AI |
 
-### Documentation Files
+---
 
-#### `README.md` (6.6 KB → Now Enhanced)
-Comprehensive project documentation:
-- Feature overview with categorization
-- Installation instructions
-- Configuration options
-- Usage examples (basic and advanced)
-- Security warnings
-- Troubleshooting guide
-- Development guidelines
-- FAQ section
-- Roadmap
+## Analysis Tools
 
-#### `QUICKSTART.md` (4.9 KB → Now Enhanced)
-Step-by-step guide for quick setup:
-- Prerequisites
-- Build instructions
-- Wallet funding guide
-- Configuration examples
-- Common workflows
-- Troubleshooting tips
-- Post-run analysis guide
+### `scripts/analyze.sh` (also `./analyze.sh` wrapper)
+SQLite analysis shell script.
 
-#### `claude.md` (NEW - ~50 KB)
-Comprehensive technical documentation for AI assistants and developers:
-- Complete architecture overview
-- Detailed code explanations
-- Data flow diagrams
-- API reference
-- Common tasks guide
-- Performance characteristics
-- Testing strategies
-- Troubleshooting guide
-- Future enhancement ideas
+| Command | Output |
+|---------|--------|
+| `summary` | Total, success, failure, avg latency |
+| `tps` | Submission and confirmation TPS |
+| `performance` | Execution time breakdown |
+| `wallets` | Per-wallet transaction counts and latency |
+| `batches` | All batch numbers |
+| `batch <id>` | Stats for a specific batch |
+| `recent` | Last 10 transactions |
+| `errors` | Error message breakdown |
+| `timeline` | Time-series transaction counts |
+| `export` | Dump transactions to CSV |
+| `query` | Interactive `sqlite3` shell |
 
-#### `PROJECT_STRUCTURE.md` (This file)
-Project structure and file descriptions
+### `scripts/graph_metrics.py` (also `./graph.py` wrapper)
+Python graphing tool. Generates PNG graphs in `images/`.
+- **TPS graph** — submission TPS (blue) + confirmation TPS (green)
+- **Latency graph** — RPC submission latency (orange) + confirmation latency (purple)
+- **Gas price graph** — signed gas price vs effective gas price from receipt
 
-#### `BATCH_TRACKING.md` (7.5 KB)
-Batch tracking feature documentation:
-- Batch number format and usage
-- Benefits and use cases
-- SQL query examples
-- API reference
-- Integration with loop mode
+Requires: `pip3 install -r requirements.txt`
 
-#### `queries.sql` (7.2 KB)
-Pre-written SQL queries for performance analysis:
-- Basic statistics
-- Performance metrics
-- Wallet analysis
-- Time series analysis
-- Nonce tracking
-- Error analysis
-- Gas analysis
-- Export queries
+### `scripts/get-gas.py`
+Helper script for analysing gas price data from the database.
 
-### Analysis Tools
+---
 
-#### `analyze.sh` (5.5 KB) - Executable
-Shell script for easy database analysis:
-- `./analyze.sh summary` - Overall statistics
-- `./analyze.sh performance` - Performance metrics
-- `./analyze.sh wallets` - Per-wallet statistics
-- `./analyze.sh recent` - Recent transactions
-- `./analyze.sh errors` - Error analysis
-- `./analyze.sh timeline` - Time-based analysis
-- `./analyze.sh export` - Export to CSV
-- `./analyze.sh query` - Interactive SQL shell
+## Runtime-Generated Files (not in repository)
 
-### Binary
+| File/Dir | Contents |
+|----------|----------|
+| `transactions.db` | SQLite database — all transaction records and wallet info |
+| `mnemonic.txt` | Generated BIP39 mnemonic — **keep secure, never commit** |
+| `logs/debug.log` | Appended debug-level log (created on first run) |
+| `logs/info.log` | Appended info-level log |
+| `logs/warn.log` | Appended warning-level log |
+| `logs/error.log` | Appended error-level log |
+| `images/*.png` | Graph outputs from `graph.py` |
+| `go-tps` | Compiled binary |
 
-#### `go-tps` (17 MB) - Executable
-Compiled binary (Linux x86-64):
-- Statically linked with CGo for SQLite support
-- Contains all dependencies
-- Ready to run on compatible Linux systems
-
-## Generated Files (Not in Repository)
-
-### `transactions.db`
-SQLite database created at runtime:
-- Stores all transaction records
-- Wallet information
-- Performance metrics
-- Can be analyzed with SQLite tools or analyze.sh
-
-### `mnemonics.txt`
-Generated mnemonic phrases (KEEP SECURE!):
-- Contains all generated mnemonics
-- Required to recover wallets
-- Never commit to version control
-- Automatically ignored by .gitignore
-
-## Workflow
+## Data Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         User Input                           │
-│              (Environment Variables/Defaults)                │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                       main.go                                │
-│  • Load configuration                                        │
-│  • Initialize database                                       │
-│  • Connect to RPC                                            │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      wallet.go                               │
-│  • Generate mnemonics (BIP39)                                │
-│  • Derive wallets (BIP44: m/44'/60'/0'/0/x)                  │
-│  • Create private keys                                       │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    transaction.go                            │
-│  • Get starting nonce for each wallet                        │
-│  • Precalculate nonces for all transactions                  │
-│  • Create transactions                                       │
-│  • Sign transactions (EIP-155)                               │
-│  • Send to RPC endpoint                                      │
-│  • Track execution time                                      │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     database.go                              │
-│  • Store transaction details                                 │
-│  • Record wallet information                                 │
-│  • Save execution times                                      │
-│  • Track status (pending/success/failed)                     │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                       Output                                 │
-│  • Console statistics                                        │
-│  • transactions.db                                           │
-│  • mnemonics.txt                                             │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  analyze.sh / queries.sql                    │
-│  • Query database                                            │
-│  • Generate reports                                          │
-│  • Export data                                               │
-└─────────────────────────────────────────────────────────────┘
+env vars / .env
+      │
+      ▼
+    main.go ───────────── wallet.go (derive + prefetch nonces)
+      │                           │
+      │     receipt worker pool ◄─┘
+      │     db writer pool     ◄─── transaction.go (create/sign/send)
+      │                                   │
+      ▼                                   ▼
+  database.go (insert pending)    database.go (update confirmed)
+      │
+      ▼
+  transactions.db
+      │
+      ▼
+  analyze.sh / graph.py / queries.sql
 ```
 
 ## Dependencies
@@ -352,35 +267,14 @@ Dependencies metadata: ~30 KB
 ## Documentation Summary
 
 ### For Users
-- **Start here**: [QUICKSTART.md](QUICKSTART.md) - Get running in 10 minutes
-- **Reference**: [README.md](README.md) - Complete feature documentation
-- **Analysis**: `./analyze.sh` - Quick database queries
+- **Start here**: [QUICKSTART.md](QUICKSTART.md) — Get running in 10 minutes
+- **Reference**: [README.md](README.md) — Complete feature documentation
+- **Analysis**: `./analyze.sh` — Quick database queries
 
 ### For Developers
-- **Technical Details**: [claude.md](claude.md) - Architecture and code deep-dive
-- **Project Layout**: [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) - This file
-- **Database Queries**: [queries.sql](queries.sql) - SQL examples
-
-### For Advanced Users
-- **Batch Tracking**: [BATCH_TRACKING.md](BATCH_TRACKING.md) - Multi-run analysis
-- **Custom Analysis**: [queries.sql](queries.sql) - Write your own queries
-- **Automation**: [Makefile](Makefile) - Build and run commands
-
-## Recent Updates
-
-### Documentation Enhancements (February 2026)
-- ✅ Added comprehensive [claude.md](claude.md) for technical deep-dive
-- ✅ Enhanced [README.md](README.md) with FAQ, roadmap, and advanced usage
-- ✅ Improved [QUICKSTART.md](QUICKSTART.md) with post-run guidance
-- ✅ Updated [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) with documentation index
-- ✅ Added cross-references between all documentation files
-
-### Feature Status
-- ✅ Batch tracking - Fully implemented
-- ✅ Loop mode - Fully implemented
-- ✅ WebSocket support - Fully implemented
-- ✅ Async receipt confirmation - Fully implemented
-- ✅ Comprehensive analysis tools - Fully implemented
+- **Technical Details**: [claude.md](claude.md) — Architecture and code deep-dive
+- **Project Layout**: [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) — This file
+- **Database Queries**: [queries.sql](queries.sql) — SQL examples
 
 ---
 

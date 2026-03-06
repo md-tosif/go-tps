@@ -1,82 +1,60 @@
 # Scripts Directory
 
-This directory contains analysis and visualization tools for go-tps.
+Analysis and visualisation tools for go-tps.
 
 ## Files
 
-### analyze.sh
-Shell script for easy database analysis and querying.
+### `analyze.sh`
+Shell script for querying the SQLite database. Also available as `./analyze.sh` in the project root (wrapper).
 
-**Usage:**
 ```bash
 ./scripts/analyze.sh [command]
 ```
 
-**Available commands:**
-- `summary` - Overall transaction statistics
-- `tps` - TPS metrics (submission & confirmation)
-- `performance` - Detailed performance breakdown
-- `wallets` - Per-wallet statistics
-- `batches` - List all batch executions
-- `batch <id>` - Statistics for specific batch
-- `recent` - Last 10 transactions
-- `errors` - Error analysis
-- `timeline` - Time-based analysis
-- `export` - Export to CSV
-- `query` - Interactive SQL shell
+| Command | Output |
+|---------|--------|
+| `summary` | Total, success, failure, avg latency |
+| `tps` | Submission and confirmation TPS |
+| `performance` | Execution time breakdown |
+| `wallets` | Per-wallet transaction counts and latency |
+| `batches` | List all batch executions |
+| `batch <id>` | Stats for a specific batch |
+| `recent` | Last 10 transactions |
+| `errors` | Error message breakdown |
+| `timeline` | Time-series transaction counts |
+| `export` | Dump transactions to CSV |
+| `query` | Interactive `sqlite3` shell |
 
-### graph_metrics.py
-**Unified Python script for generating both TPS and Latency visualization graphs.**
-
-This is the main graphing tool that combines TPS and latency analysis in one convenient interface.
-
-**Features:**
-- Generate TPS graphs, latency graphs, or both
-- Saves all images to `images/` folder (organized output)
-- Groups data into 1-second intervals
-- Displays comprehensive statistics
-- Interactive batch selection
-- High-quality PNG output (300 DPI)
-
-**Usage:**
-```bash
-./scripts/graph_metrics.py
-```
-
-**What it generates:**
-
-1. **TPS Graph** (`images/tps_graph_*.png`)
-   - Blue line: Submission TPS
-   - Green line: Confirmation TPS
-   - Shows avg/max statistics
-
-2. **Latency Graph** (`images/latency_graph_*.png`)
-   - Orange line: Execution Latency (ms) - time to execute RPC submission
-   - Purple line: Confirmation Latency (ms) - time from submission to confirmation
-   - Shows avg/min/max statistics
-
-3. **Gas Price Graph** (`images/gas_price_graph_*.png`)
-   - Blue line: Transaction Gas Price (Gwei) - gas price set when submitting
-   - Red line: Effective Gas Price (Gwei) - actual gas price paid from receipt
-   - Shows avg/min/max statistics for both prices
-   - Useful for analyzing EIP-1559 dynamics
-
-**Interactive Options:**
-- Select specific batch or all batches
-- Choose TPS, Latency, Gas Price, or combinations
-- Press Enter for defaults (most recent batch, all graphs)
+### `graph_metrics.py`
+Unified Python graphing tool. Also available as `./graph.py` in the project root (wrapper). Saves all images to `images/`.
 
 **Requirements:**
 ```bash
 pip3 install -r requirements.txt
 ```
 
-## Backward Compatibility
-
-For convenience, wrapper scripts in the root directory allow you to run:
+**Usage:**
 ```bash
-./analyze.sh [command]      # Same as ./scripts/analyze.sh
-./graph.py                  # Same as ./scripts/graph_metrics.py
+./scripts/graph_metrics.py
 ```
 
-**Recommended:** Use `./graph.py` for generating all graphs. All output files are saved in the `images/` folder.
+Interactive prompts let you select a batch and graph type:
+
+| Graph | File | Description |
+|-------|------|-------------|
+| TPS | `images/tps_graph_<batch>.png` | Submission TPS (blue) + confirmation TPS (green) |
+| Latency | `images/latency_graph_<batch>.png` | RPC submission latency (orange) + confirmation latency (purple) |
+| Gas Price | `images/gas_price_graph_<batch>.png` | Signed gas price vs effective gas price from receipt |
+
+All graphs group data into 1-second intervals and display avg/min/max statistics. Output is high-quality PNG (300 DPI).
+
+### `get-gas.py`
+Helper script for analysing gas price data from the database. Useful for examining gas price trends across batches.
+
+## Root Wrappers
+
+For convenience, the root directory contains thin wrappers:
+```bash
+./analyze.sh [command]   # → scripts/analyze.sh
+./graph.py               # → scripts/graph_metrics.py
+```

@@ -1,16 +1,16 @@
-# Go TPS (Transactions Per Second) Tester
+# Go TPS — Ethereum Transaction Throughput Tester
 
-A Go-based tool for testing Ethereum network transaction throughput. This tool generates multiple wallets from mnemonics, creates batched transactions with precalculated nonces, and tracks performance metrics in a SQLite database.
+A Go-based tool for benchmarking Ethereum network transaction throughput (TPS). It derives multiple wallets from a BIP39 mnemonic, sends batched transactions with pre-calculated nonces in parallel, and stores performance metrics in a SQLite database for later analysis.
 
-## 📚 Documentation
+## Documentation
 
-- **[QUICKSTART.md](QUICKSTART.md)** - Quick start guide for first-time users
-- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - Detailed project structure and file descriptions
-- **[BATCH_TRACKING.md](BATCH_TRACKING.md)** - Guide to batch tracking feature
-- **[claude.md](claude.md)** - Comprehensive technical documentation for AI assistants
-- **[queries.sql](queries.sql)** - Pre-written SQL queries for analysis
-- **[scripts/analyze.sh](scripts/analyze.sh)** - Shell script for easy database analysis
-- **[scripts/graph_metrics.py](scripts/graph_metrics.py)** - Unified TPS, latency, and gas price visualization tool
+| File | Purpose |
+|------|---------|
+| [QUICKSTART.md](QUICKSTART.md) | Get running in under 10 minutes |
+| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | File-by-file reference |
+| [queries.sql](queries.sql) | Pre-written SQL analysis queries |
+| [scripts/README.md](scripts/README.md) | Analysis and graphing scripts |
+| [claude.md](claude.md) | Deep technical reference for developers/AI |
 
 ## 📑 Table of Contents
 
@@ -95,7 +95,7 @@ Configure the application using environment variables:
 | `TO_ADDRESS` | Recipient address for all transactions | `0x0000000000000000000000000000000000000001` |
 | `RUN_DURATION_MINUTES` | Duration to run in loop mode (0 = single run) | `0` |
 | `RECEIPT_WORKERS` | Number of concurrent workers for receipt confirmation | `10` |
-| `LOG_LEVEL` | Log level: DEBUG, INFO, WARN, ERROR | `INFO` |
+| `LOG_LEVEL` | Log level: DEBUG, INFO, WARN, ERROR | `DEBUG` |
 
 ## Usage
 
@@ -470,23 +470,27 @@ go-tps/
 ├── scripts/             # Analysis and visualization tools
 │   ├── README.md        # Scripts documentation
 │   ├── analyze.sh       # Shell script for database analysis
-│   └── graph_metrics.py # Unified TPS, Latency & Gas Price graphing tool
+│   ├── graph_metrics.py # Unified TPS, Latency & Gas Price graphing tool
+│   └── get-gas.py       # Gas price analysis helper
 ├── analyze.sh           # Wrapper for scripts/analyze.sh
 ├── graph.py             # Wrapper for scripts/graph_metrics.py
 ├── images/              # Output folder for all generated graphs
 │   ├── tps_graph_*.png        # TPS graphs
-│   └── latency_graph_*.png    # Latency graphs
+│   ├── latency_graph_*.png    # Latency graphs
+│   └── gas_price_graph_*.png  # Gas price graphs
+├── logs/                # Per-level log files (created on first run)
+│   ├── debug.log
+│   ├── info.log
+│   ├── warn.log
+│   └── error.log
 ├── go.mod               # Go module dependencies
 ├── go.sum               # Dependency checksums
 ├── README.md            # This file
 ├── QUICKSTART.md        # Quick start guide
 ├── PROJECT_STRUCTURE.md # Project structure documentation
-├── BATCH_TRACKING.md    # Batch tracking guide
 ├── claude.md            # Technical documentation
 └── .gitignore           # Git ignore rules
 ```
-
-**Note:** All graph output files are saved in the `images/` folder for better organization. Use `./graph.py` for generating TPS and latency graphs.
 
 ## Important Security Notes
 
@@ -499,12 +503,30 @@ go-tps/
 
 ## How It Works
 
-1. **Mnemonic Management**: Uses provided mnemonic or generates a new one using BIP39 standard
-2. **Wallet Generation**: Derives multiple wallets from single mnemonic using BIP44 (m/44'/60'/0'/0/x)
-3. **Nonce Management**: Fetches the current nonce for each wallet and precalculates nonces for all transactions
-4. **Transaction Creation**: Creates and signs multiple transactions for each wallet
-5. **Batch Submission**: Sends transactions to the RPC endpoint sequentially, tracking execution time
-6. **Data Storage**: Saves all transaction details and performance metrics to SQLite database
+### Startup
+1. Load config from environment variables (`.env` if present)
+2. Open per-level log files: `logs/debug.log`, `logs/info.log`, `logs/warn.log`, `logs/error.log`
+3. Initialise SQLite database (tables + indexes)
+4. Connect to RPC (and optionally WebSocket)
+
+### Wallet Setup
+5. Generate a new BIP39 mnemonic or load from `MNEMONIC`
+6. Derive `WALLET_COUNT` wallets via BIP44 (`m/44'/60'/0'/0/i`); each wallet's pending nonce is pre-fetched from the RPC during derivation — no extra calls needed at send time
+7. Display balances and prompt for confirmation
+
+### Transaction Submission
+8. Generate a unique batch number (`batch-YYYYMMDD-HHMMSS`)
+9. Start a **DB writer pool** — workers serialise SQLite inserts and dispatch receipt jobs only _after_ each INSERT succeeds, preventing UPDATE-before-INSERT races
+10. Start a **receipt worker pool** — long-lived workers each reuse one RPC connection across multiple jobs
+11. For each wallet in parallel: pre-calculate nonces locally, create + sign + send each transaction, queue a `DBWriteJob` (failed tx: insert only; successful tx: insert + receipt job)
+12. Wait for all wallet goroutines then drain the DB writer pool, then drain the receipt job channel
+
+### Receipt Confirmation (background)
+13. Each receipt worker runs two strategies simultaneously:
+    - **WebSocket**: subscribe to new block headers, check receipt on each new block
+    - **RPC polling**: `eth_getTransactionReceipt` every 500 ms
+14. First result wins; on success the block header is fetched to record the canonical block timestamp
+15. On timeout: re-queues the job up to **3 times** before marking the transaction failed
 
 ## Troubleshooting
 
@@ -518,10 +540,7 @@ Solution: Ensure your RPC endpoint is running and accessible.
 Transactions will fail if wallets don't have enough ETH. Fund the generated wallets before running the test.
 
 ### Database Locked
-```
-Error: database is locked
-```
-Solution: Close any other programs accessing the database file.
+SQLite writes are serialised through the DB writer pool and protected by a mutex — this error should not occur in normal usage. If it does, ensure only one `go-tps` process is running against the same `transactions.db`.
 
 ## Development
 
