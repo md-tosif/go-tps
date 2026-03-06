@@ -12,7 +12,7 @@ RPC_URL = "https://eth-sepolia-internal-zeeve.blockinfra.zeeve.net/v1zhft4o8nxx8
 
 # --- Set the first and last transaction hashes (inclusive) ---
 START_TX_HASH = "0x0af7376b579d49f886513e4eb2b1ddfae149f410ca6bd853b242556969bde49e"
-END_TX_HASH   = "0xecc0f313a27c77bbd08035dce1f7d892a8cfb5f5f7bbb842666764e0b564c7c1"
+END_TX_HASH   = "0x787897269e7663663eeea03b8887a0e7da8d467a82116aa6c70757eab3183907"
 # Sender is inferred automatically from START_TX_HASH
 # -------------------------------------------------------------
 
@@ -116,6 +116,6 @@ for nonce in range(nonce_start, nonce_end + 1):
 print(f"\nProcessed {len(rows)} / {total} transactions.")
 
 df = pd.DataFrame(rows)
-df.to_excel("txn_details.xlsx", index=False)
+df.to_csv("txn_details.csv", index=False)
 
-print("Excel file generated: txn_details.xlsx")
+print("CSV file generated: txn_details.csv")
