@@ -196,6 +196,12 @@ def analyze_database(db_path):
     stats['avg_gas_used'] = round(row[2], 2) if row[2] else 0
     stats['total_gas_used'] = row[3] if row[3] else 0
     
+    # Calculate gas used per second
+    if stats['submission_window_seconds'] > 0:
+        stats['gas_used_per_second'] = round(stats['total_gas_used'] / stats['submission_window_seconds'], 2)
+    else:
+        stats['gas_used_per_second'] = 0
+    
     # ===== GAS LIMIT =====
     cursor.execute("""
         SELECT 
@@ -336,6 +342,7 @@ def generate_csv(databases, output_file='db_summary.csv'):
         'max_gas_used',
         'avg_gas_used',
         'total_gas_used',
+        'gas_used_per_second',
         
         # Gas Limit
         'min_gas_limit',
