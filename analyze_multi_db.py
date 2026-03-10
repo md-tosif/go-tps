@@ -24,6 +24,8 @@ def analyze_database(db_path):
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+
+    stats = {}
     
     # ===== BASIC COUNTS =====
     # Total transactions and status breakdown
