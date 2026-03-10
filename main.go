@@ -647,7 +647,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 
 	// Wait for transaction submissions to complete
 	fmt.Println("\nWaiting for all transactions to be submitted...")
-	// wgSubmit.Wait()
+	wgSubmit.Wait()
 	fmt.Println("✓ All transactions submitted")
 	fmt.Println("✓ Database writes queued (processing in background)")
 	fmt.Println("✓ Receipt confirmations queued (processing in background)")
