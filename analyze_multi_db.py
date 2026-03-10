@@ -350,7 +350,6 @@ def generate_csv(databases, output_file='db_summary.csv'):
     print("SUMMARY")
     print("="*80)
     for stats in all_stats:
-        print(f"\n{stats['database_name']}:")
         print(f"  Total Transactions: {stats['total_transactions']:,}")
         print(f"  Success Rate: {stats['success_rate_percent']}%")
         print(f"  TPS (Submission): {stats['tps_submission']}")
