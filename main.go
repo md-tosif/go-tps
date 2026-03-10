@@ -460,6 +460,10 @@ func main() {
 	receiptWG.Wait() // Wait for all receipt confirmations to finish
 	fmt.Println("✓ All receipt confirmations completed")
 
+	// sleep 60 seconds
+	fmt.Println("\nSleeping for 60 seconds to allow any pending operations to complete...")
+	time.Sleep(60 * time.Second)
+
 	// Final summary
 	fmt.Println()
 	fmt.Println(strings.Repeat("=", 60))
@@ -540,7 +544,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	totalTransactions := 0
 	totalSuccessful := 0
 	totalFailed := 0
-	// startTime := time.Now()
+	startTime := time.Now()
 
 	// Use mutex for thread-safe counter updates
 	var mu sync.Mutex
@@ -645,7 +649,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		}(walletIdx, wallet)
 	}
 
-	/* // Use a done channel to ensure the summary goroutine completes before returning
+	// Use a done channel to ensure the summary goroutine completes before returning
 	// This prevents goroutine leaks in loop mode
 	summaryDone := make(chan struct{})
 
@@ -735,9 +739,6 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		fmt.Println("Note: DB writes and receipt confirmations continue in background")
 	}()
 
-	// Wait for summary goroutine to complete before returning
-	// This prevents goroutine leaks in loop mode
-	<-summaryDone */
 }
 
 // DBWriteJob bundles a transaction insert with an optional follow-up receipt job.
