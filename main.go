@@ -549,6 +549,9 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		go func(idx int, w *Wallet) {
 			defer wgSubmit.Done()
 
+			db.mu.Lock()
+			defer db.mu.Unlock()
+
 			logDebug("\n[Wallet %d/%d] (%s)\n",
 				idx+1, len(wallets), w.Address.Hex())
 
