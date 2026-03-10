@@ -408,11 +408,24 @@ func main() {
 
 	var receiptWG sync.WaitGroup // WaitGroup for receipt confirmations
 
+	// Create worker pools ONCE (reused across all iterations in loop mode)
+	// Calculate buffer size for channels
+	bufferSize := config.WalletCount * config.TxPerWallet
+	receiptJobChan := make(chan ReceiptJob, bufferSize)
+	dbWriteChan := make(chan DBWriteJob, bufferSize)
+	var dbWriteWG sync.WaitGroup
+
+	// Start worker pools
+	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG)
+	logInfo("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
+	startDBWriterPool(config.ReceiptWorkers, dbWriteChan, receiptJobChan, db, &dbWriteWG)
+	logInfo("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
+
 	// Check if we should run in loop mode
 	if config.RunDurationMinutes > 0 {
 		fmt.Printf("Running in LOOP MODE for %d minutes\n", config.RunDurationMinutes)
 		fmt.Println()
-		runInLoopMode(config, db, txSender, wsManager, wallets, &receiptWG)
+		runInLoopMode(config, db, txSender, wsManager, wallets, dbWriteChan, &dbWriteWG)
 	} else {
 		fmt.Println("Running in SINGLE MODE")
 		fmt.Println()
@@ -420,7 +433,7 @@ func main() {
 		// Record start time for single execution
 		executionStart := time.Now()
 
-		runSingleExecution(config, db, txSender, wsManager, wallets, &receiptWG)
+		runSingleExecution(config, db, txSender, wsManager, wallets, dbWriteChan, &dbWriteWG)
 
 		// Calculate elapsed time and ensure minimum 1 second
 		executionElapsed := time.Since(executionStart)
@@ -436,10 +449,16 @@ func main() {
 		}
 	}
 
-	fmt.Println("\nWaiting a few seconds for any pending receipt confirmations to finish...")
+	// Close channels to signal workers to exit
+	fmt.Println("\nClosing worker channels...")
+	close(dbWriteChan)
+	dbWriteWG.Wait() // Wait for DB writers to finish
+	fmt.Println("✓ All database writes completed")
+
+	close(receiptJobChan)
+	fmt.Println("Waiting for receipt confirmations to finish...")
 	receiptWG.Wait() // Wait for all receipt confirmations to finish
-	// sleep for 10 seconds before creating summary to allow any pending receipt confirmations to finish
-	// time.Sleep(60 * time.Second)
+	fmt.Println("✓ All receipt confirmations completed")
 
 	// Final summary
 	fmt.Println()
@@ -450,7 +469,7 @@ func main() {
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wsManager *WebSocketManager, wallets []*Wallet, wg *sync.WaitGroup) {
+func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, wsManager *WebSocketManager, wallets []*Wallet, dbWriteChan chan DBWriteJob, dbWriteWG *sync.WaitGroup) {
 	duration := time.Duration(config.RunDurationMinutes) * time.Minute
 	startTime := time.Now()
 	endTime := startTime.Add(duration)
@@ -469,7 +488,7 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, ws
 		// Record start time for this iteration
 		iterationStart := time.Now()
 
-		runSingleExecution(config, db, txSender, wsManager, wallets, wg)
+		runSingleExecution(config, db, txSender, wsManager, wallets, dbWriteChan, dbWriteWG)
 
 		// Calculate elapsed time and ensure minimum 1 second per iteration
 		iterationElapsed := time.Since(iterationStart)
@@ -495,7 +514,7 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, ws
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wsManager *WebSocketManager, wallets []*Wallet, wg *sync.WaitGroup) {
+func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wsManager *WebSocketManager, wallets []*Wallet, dbWriteChan chan DBWriteJob, dbWriteWG *sync.WaitGroup) {
 	// Generate unique batch number for this execution
 	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
 	fmt.Printf("Batch Number: %s\n\n", batchNumber)
@@ -503,20 +522,6 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	// Create context with timeout for this execution
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.ContextTimeout)*time.Second)
 	defer cancel()
-
-	// Create receipt worker pool
-	receiptJobChan := make(chan ReceiptJob, config.WalletCount*config.TxPerWallet)
-
-	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, wg)
-	logInfo("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
-
-	// Create DB writer worker pool (single worker keeps SQLite write-serialized).
-	// The DB writer also dispatches receipt jobs AFTER each INSERT to prevent
-	// the UPDATE-before-INSERT race condition.
-	dbWriteChan := make(chan DBWriteJob, config.WalletCount*config.TxPerWallet)
-	var dbWriteWG sync.WaitGroup
-	startDBWriterPool(config.ReceiptWorkers, dbWriteChan, receiptJobChan, db, &dbWriteWG)
-	logInfo("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
 
 	// Parse configuration values
 	value := new(big.Int)
@@ -651,15 +656,11 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		fmt.Println("\nWaiting for all transactions to be submitted...")
 		wgSubmit.Wait()
 		fmt.Println("✓ All transactions submitted")
+		fmt.Println("✓ Database writes queued (processing in background)")
+		fmt.Println("✓ Receipt confirmations queued (processing in background)")
 
-		// All wallet goroutines are done sending DB jobs; drain the writer pool
-		close(dbWriteChan)
-		dbWriteWG.Wait()
-		fmt.Println("✓ All transactions saved to database")
-
-		// Now safe to close the receipt job channel
-		close(receiptJobChan)
-		fmt.Println("Note: Receipt confirmations are happening in background")
+		// Note: We don't close channels here anymore - they're reused across iterations
+		// DB writes and receipt confirmations happen asynchronously in the worker pools
 
 		totalTime := time.Since(startTime)
 
@@ -729,10 +730,9 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		}
 
 		fmt.Println()
-		fmt.Printf("✓ All data saved to database: %s\n", config.DBPath)
+		fmt.Printf("✓ All data queued for database: %s\n", config.DBPath)
 		fmt.Println()
-		fmt.Println("Done!")
-		fmt.Println("(Receipt confirmations continue in background)")
+		fmt.Println("Note: DB writes and receipt confirmations continue in background")
 	}()
 
 	// Wait for summary goroutine to complete before returning
