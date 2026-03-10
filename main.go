@@ -460,10 +460,6 @@ func main() {
 	receiptWG.Wait() // Wait for all receipt confirmations to finish
 	fmt.Println("✓ All receipt confirmations completed")
 
-	// sleep 60 seconds
-	fmt.Println("\nSleeping for 60 seconds to allow any pending operations to complete...")
-	time.Sleep(60 * time.Second)
-
 	// Final summary
 	fmt.Println()
 	fmt.Println(strings.Repeat("=", 60))
