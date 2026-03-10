@@ -1,0 +1,167 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-tps
+  labels:
+    app: go-tps
+spec:
+  ports:
+  - port: 8080
+    name: metrics
+  clusterIP: None
+  selector:
+    app: go-tps
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: go-tps
+  labels:
+    app: go-tps
+spec:
+  serviceName: go-tps
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-tps
+  template:
+    metadata:
+      labels:
+        app: go-tps
+    spec:
+      initContainers:
+      - name: download-binary
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          apk add --no-cache wget ca-certificates
+          wget -O /app/go-tps ${BINARY_URL}
+          chmod +x /app/go-tps
+        env:
+        - name: BINARY_URL
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: BINARY_URL
+        volumeMounts:
+        - name: app-binary
+          mountPath: /app
+      containers:
+      - name: go-tps
+        image: alpine:latest
+        command: ["/app/go-tps"]
+        workingDir: /data
+        env:
+        - name: RPC_URL
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: RPC_URL
+        - name: WS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: WS_URL
+        - name: DB_PATH
+          value: "/data/transactions.db"
+        - name: WALLET_COUNT
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: WALLET_COUNT
+        - name: TX_PER_WALLET
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: TX_PER_WALLET
+        - name: VALUE_WEI
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: VALUE_WEI
+        - name: TO_ADDRESS
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: TO_ADDRESS
+        - name: RUN_DURATION_MINUTES
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: RUN_DURATION_MINUTES
+        - name: RECEIPT_WORKERS
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: RECEIPT_WORKERS
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: go-tps-config
+              key: LOG_LEVEL
+        - name: MNEMONIC
+          valueFrom:
+            secretKeyRef:
+              name: go-tps-secrets
+              key: mnemonic
+              optional: true
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: logs
+          mountPath: /data/logs
+        - name: app-binary
+          mountPath: /app
+        resources:
+          requests:
+            memory: "6Gi"
+            cpu: "4"
+          limits:
+            memory: "8Gi"
+            cpu: "6"
+      volumes:
+      - name: app-binary
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 1Gi
+  - metadata:
+      name: logs
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 500Mi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: go-tps-secrets
+type: Opaque
+stringData:
+  mnemonic: ""  # Add your mnemonic here or leave empty for auto-generation
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: go-tps-config
+data:
+  BINARY_URL: "https://github.com/md-tosif/go-tps/releases/download/build-20260310-075917-ecece88/go-tps-linux-amd64"
+  RPC_URL: "http://op-stack-op-succinct-rpc.op-succinct.svc.cluster.local:8545"
+  WS_URL: "http://op-stack-op-succinct-rpc.op-succinct.svc.cluster.local:8546"
+  WALLET_COUNT: "10"
+  TX_PER_WALLET: "30"
+  VALUE_WEI: "1000000000000000"
+  TO_ADDRESS: "0x0000000000000000000000000000000000000001"
+  RUN_DURATION_MINUTES: "0"
+  RECEIPT_WORKERS: "10"
+  LOG_LEVEL: "INFO"
