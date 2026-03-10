@@ -645,7 +645,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		}(walletIdx, wallet)
 	}
 
-	// Use a done channel to ensure the summary goroutine completes before returning
+	/* // Use a done channel to ensure the summary goroutine completes before returning
 	// This prevents goroutine leaks in loop mode
 	summaryDone := make(chan struct{})
 
@@ -737,7 +737,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 
 	// Wait for summary goroutine to complete before returning
 	// This prevents goroutine leaks in loop mode
-	<-summaryDone
+	<-summaryDone */
 }
 
 // DBWriteJob bundles a transaction insert with an optional follow-up receipt job.
