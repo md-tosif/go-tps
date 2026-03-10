@@ -33,6 +33,7 @@ const (
 	DefaultConnectionRefresh  = 100     // refresh connection every N jobs
 	DefaultDBRetentionDays    = 30      // cleanup records older than this
 	DefaultWSReconnectDelay   = 5       // seconds before reconnecting WebSocket
+	DefaultBufferSize         = 1000    // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
 )
 
 // LogLevel represents logging levels
@@ -153,6 +154,7 @@ type Config struct {
 	ConnectionRefresh  int  // Refresh connections every N jobs
 	DBRetentionDays    int  // Cleanup records older than this
 	WSReconnectDelay   int  // Seconds before reconnecting WebSocket
+	BufferSize         int  // Channel buffer size (0 = auto-calculate)
 }
 
 // ReceiptJob represents a receipt confirmation job
@@ -410,8 +412,15 @@ func main() {
 
 	// Create worker pools ONCE (reused across all iterations in loop mode)
 	// Calculate buffer size for channels
-	bufferSize := config.WalletCount * config.TxPerWallet
-	receiptJobChan := make(chan ReceiptJob, bufferSize)
+	bufferSize := config.BufferSize
+	if bufferSize == 0 {
+		// Auto-calculate from wallet and transaction counts
+		bufferSize = config.WalletCount * config.TxPerWallet
+		logDebug("Auto-calculated buffer size: %d (WalletCount %d × TxPerWallet %d)\n", bufferSize, config.WalletCount, config.TxPerWallet)
+	} else {
+		logDebug("Using configured buffer size: %d\n", bufferSize)
+	}
+	receiptJobChan := make(chan ReceiptJob, config.WalletCount*config.TxPerWallet)
 	dbWriteChan := make(chan DBWriteJob, bufferSize)
 	var dbWriteWG sync.WaitGroup
 
@@ -844,6 +853,7 @@ func LoadConfig() *Config {
 		ConnectionRefresh:  getEnvInt("CONNECTION_REFRESH", DefaultConnectionRefresh),
 		DBRetentionDays:    getEnvInt("DB_RETENTION_DAYS", DefaultDBRetentionDays),
 		WSReconnectDelay:   getEnvInt("WS_RECONNECT_DELAY", DefaultWSReconnectDelay),
+		BufferSize:         getEnvInt("BUFFER_SIZE", DefaultBufferSize),
 	}
 
 	// Set global log level
