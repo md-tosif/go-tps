@@ -540,7 +540,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	totalTransactions := 0
 	totalSuccessful := 0
 	totalFailed := 0
-	startTime := time.Now()
+	// startTime := time.Now()
 
 	// Use mutex for thread-safe counter updates
 	var mu sync.Mutex
