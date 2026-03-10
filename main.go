@@ -239,6 +239,9 @@ func (wm *WebSocketManager) Close() {
 	}
 }
 
+// Global mutex to pause workers during transaction submission
+var submissionMutex sync.RWMutex
+
 func main() {
 	fmt.Println("=== Ethereum TPS Tester ===")
 	fmt.Println()
@@ -515,6 +518,10 @@ func runInLoopMode(config *Config, db *Database, txSender *TransactionSender, ws
 }
 
 func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wsManager *WebSocketManager, wallets []*Wallet, dbWriteChan chan DBWriteJob, dbWriteWG *sync.WaitGroup) {
+	// Lock submission mutex to pause all workers during transaction submission
+	submissionMutex.Lock()
+	logDebug("🔒 Submission phase started - workers paused\n")
+
 	// Generate unique batch number for this execution
 	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
 	fmt.Printf("Batch Number: %s\n\n", batchNumber)
@@ -548,9 +555,6 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		wgSubmit.Add(1)
 		go func(idx int, w *Wallet) {
 			defer wgSubmit.Done()
-
-			db.mu.Lock()
-			defer db.mu.Unlock()
 
 			logDebug("\n[Wallet %d/%d] (%s)\n",
 				idx+1, len(wallets), w.Address.Hex())
@@ -636,6 +640,11 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	fmt.Println("\nWaiting for all transactions to be submitted...")
 	wgSubmit.Wait()
 	fmt.Println("✓ All transactions submitted")
+
+	// Unlock submission mutex to resume workers
+	submissionMutex.Unlock()
+	logDebug("🔓 Submission phase completed - workers resumed\n")
+
 	fmt.Println("✓ Database writes queued (processing in background)")
 	fmt.Println("✓ Receipt confirmations queued (processing in background)")
 
@@ -691,6 +700,9 @@ func startDBWriterPool(workerCount int, jobChan <-chan DBWriteJob, receiptJobCha
 func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, receiptJobChan chan ReceiptJob, db *Database, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for job := range jobChan {
+		// Wait for submission phase to complete before processing
+		submissionMutex.RLock()
+		submissionMutex.RUnlock()
 		if _, err := db.InsertTransaction(job.Tx); err != nil {
 			logWarn("[DBWriter %d] Could not save transaction to DB: %v\n", workerID, err)
 			continue
@@ -724,6 +736,10 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup) {
 
 	// Process jobs from channel
 	for job := range jobChan {
+		// Wait for submission phase to complete before processing
+		submissionMutex.RLock()
+		submissionMutex.RUnlock()
+
 		// Initialize, refresh, or reuse RPC connection
 		needsRefresh := txSender == nil ||
 			currentRPCURL != job.RPCURL ||

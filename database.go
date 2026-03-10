@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -30,7 +29,6 @@ type Transaction struct {
 
 type Database struct {
 	db *sql.DB
-	mu sync.Mutex // Protects all database operations
 }
 
 func NewDatabase(dbPath string) (*Database, error) {
@@ -186,8 +184,6 @@ func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *t
 }
 
 func (d *Database) InsertWallet(address, derivationPath string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	query := `
 		INSERT INTO wallets (address, derivation_path, created_at)
@@ -457,8 +453,6 @@ func (d *Database) GetPendingTransactions() ([]*Transaction, error) {
 // CleanupOldRecords removes transactions older than the specified number of days
 // Returns the number of records deleted
 func (d *Database) CleanupOldRecords(retentionDays int) (int64, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	cutoffDate := time.Now().AddDate(0, 0, -retentionDays)
 
