@@ -4,17 +4,16 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"go-tps/logger"
+
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/joho/godotenv"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -35,106 +34,7 @@ const (
 	DefaultBufferSize         = 1000    // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
 )
 
-// LogLevel represents logging levels
-type LogLevel int
-
-const (
-	DEBUG LogLevel = iota
-	INFO
-	WARN
-	ERROR
-)
-
-// Global logging configuration
-var currentLogLevel LogLevel = INFO
-
-// Per-level file loggers (nil until initLogFiles is called)
-var (
-	fileLoggers [4]*log.Logger // indexed by LogLevel: DEBUG=0, INFO=1, WARN=2, ERROR=3
-	logFiles    [4]*os.File
-)
-
-// initLogFiles creates the logs directory and opens one log file per level with rotation.
-// Each file is appended to across runs and contains a timestamp prefix per line.
-// Uses lumberjack for automatic log rotation (100MB max size, 3 backups, 28 days retention).
-func initLogFiles() error {
-	if err := os.MkdirAll("logs", 0o755); err != nil {
-		return fmt.Errorf("could not create logs directory: %w", err)
-	}
-
-	names := [4]string{"logs/debug.log", "logs/info.log", "logs/warn.log", "logs/error.log"}
-	for i, name := range names {
-		// Use lumberjack for automatic log rotation
-		logger := &lumberjack.Logger{
-			Filename:   name,
-			MaxSize:    100, // megabytes
-			MaxBackups: 3,
-			MaxAge:     28,   // days
-			Compress:   true, // compress old logs
-		}
-		fileLoggers[i] = log.New(logger, "", log.Ldate|log.Ltime|log.Lmicroseconds)
-	}
-	return nil
-}
-
-// closeLogFiles flushes and closes all open log files.
-func closeLogFiles() {
-	// Lumberjack loggers are closed automatically via garbage collection
-	// No explicit close needed
-}
-
-// parseLogLevel converts string to LogLevel
-func parseLogLevel(level string) LogLevel {
-	switch strings.ToUpper(level) {
-	case "DEBUG":
-		return DEBUG
-	case "INFO":
-		return INFO
-	case "WARN", "WARNING":
-		return WARN
-	case "ERROR":
-		return ERROR
-	default:
-		return INFO
-	}
-}
-
-// Logging functions
-func logDebug(format string, args ...interface{}) {
-	if fileLoggers[DEBUG] != nil {
-		fileLoggers[DEBUG].Printf("[DEBUG] "+format, args...)
-	}
-	if currentLogLevel <= DEBUG {
-		fmt.Printf("[DEBUG] "+format, args...)
-	}
-}
-
-func logInfo(format string, args ...interface{}) {
-	if fileLoggers[INFO] != nil {
-		fileLoggers[INFO].Printf("[INFO] "+format, args...)
-	}
-	if currentLogLevel <= INFO {
-		fmt.Printf("[INFO] "+format, args...)
-	}
-}
-
-func logWarn(format string, args ...interface{}) {
-	if fileLoggers[WARN] != nil {
-		fileLoggers[WARN].Printf("[WARN] "+format, args...)
-	}
-	if currentLogLevel <= WARN {
-		fmt.Printf("[WARN] "+format, args...)
-	}
-}
-
-func logError(format string, args ...interface{}) {
-	if fileLoggers[ERROR] != nil {
-		fileLoggers[ERROR].Printf("[ERROR] "+format, args...)
-	}
-	if currentLogLevel <= ERROR {
-		fmt.Printf("[ERROR] "+format, args...)
-	}
-}
+// (logging implementation moved to the logger package)
 
 type Config struct {
 	RPCURL             string
@@ -155,235 +55,164 @@ type Config struct {
 	BufferSize         int  // Channel buffer size (0 = auto-calculate)
 }
 
-// ReceiptJob represents a receipt confirmation job
-type ReceiptJob struct {
-	TxHash     string
-	Nonce      uint64
-	StartTime  time.Time
-	RetryCount int // number of times this job has been retried due to timeout
-}
-
-// WebSocketManager handles WebSocket connection with automatic reconnection
-type WebSocketManager struct {
-	client         *ethclient.Client
-	url            string
-	reconnectMu    sync.Mutex
-	reconnecting   bool
-	reconnectDelay time.Duration
-}
-
-// NewWebSocketManager creates a new WebSocket manager
-func NewWebSocketManager(url string, reconnectDelay int) *WebSocketManager {
-	return &WebSocketManager{
-		url:            url,
-		reconnectDelay: time.Duration(reconnectDelay) * time.Second,
-	}
-}
-
-// Connect establishes a WebSocket connection
-func (wm *WebSocketManager) Connect() error {
-	client, err := ethclient.Dial(wm.url)
-	if err != nil {
-		return err
-	}
-	wm.client = client
-	return nil
-}
-
-// GetClient returns the current client (may trigger reconnection)
-func (wm *WebSocketManager) GetClient() *ethclient.Client {
-	wm.reconnectMu.Lock()
-	defer wm.reconnectMu.Unlock()
-	return wm.client
-}
-
-// Reconnect attempts to reconnect the WebSocket
-func (wm *WebSocketManager) Reconnect() error {
-	wm.reconnectMu.Lock()
-	defer wm.reconnectMu.Unlock()
-
-	if wm.reconnecting {
-		return fmt.Errorf("reconnection already in progress")
-	}
-
-	wm.reconnecting = true
-	defer func() { wm.reconnecting = false }()
-
-	logWarn("WebSocket disconnected, attempting reconnection in %v...\n", wm.reconnectDelay)
-	time.Sleep(wm.reconnectDelay)
-
-	if wm.client != nil {
-		wm.client.Close()
-	}
-
-	client, err := ethclient.Dial(wm.url)
-	if err != nil {
-		return err
-	}
-
-	wm.client = client
-	logInfo("✓ WebSocket reconnected successfully\n")
-	return nil
-}
-
-// Close closes the WebSocket connection
-func (wm *WebSocketManager) Close() {
-	wm.reconnectMu.Lock()
-	defer wm.reconnectMu.Unlock()
-	if wm.client != nil {
-		wm.client.Close()
-	}
-}
-
 func main() {
 	fmt.Println("=== Ethereum TPS Tester ===")
 	fmt.Println()
 
 	// Initialise per-level log files (logs/debug.log, info.log, warn.log, error.log)
-	if err := initLogFiles(); err != nil {
+	if err := logger.InitLogFiles(); err != nil {
 		fmt.Printf("Warning: could not initialise log files: %v\n", err)
 	} else {
-		defer closeLogFiles()
+		defer logger.CloseLogFiles()
 		fmt.Println("✓ Log files initialised in logs/")
 	}
 
 	// Load .env file if it exists (optional)
 	if err := godotenv.Load(); err != nil {
-		logDebug("No .env file found, using environment variables or defaults\n")
+		logger.Debug("No .env file found, using environment variables or defaults\n")
 	}
 
 	// Load configuration
 	config := LoadConfig()
+	logger.SetLevel(config.LogLevel)
 
 	// Initialize database
-	logInfo("Initializing database...\n")
+	logger.Info("Initializing database...\n")
 	db, err := NewDatabase(config.DBPath)
 	if err != nil {
-		logError("Error initializing database: %v\n", err)
+		logger.Error("Error initializing database: %v\n", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-	logInfo("✓ Database initialized\n")
+	logger.Info("✓ Database initialized\n")
 
 	// Cleanup old records if retention is configured
 	if config.DBRetentionDays > 0 {
-		logInfo("Cleaning up records older than %d days...\n", config.DBRetentionDays)
+		logger.Info("Cleaning up records older than %d days...\n", config.DBRetentionDays)
 		deleted, err := db.CleanupOldRecords(config.DBRetentionDays)
 		if err != nil {
-			logWarn("Could not cleanup old records: %v\n", err)
+			logger.Warn("Could not cleanup old records: %v\n", err)
 		} else if deleted > 0 {
-			logInfo("✓ Cleaned up %d old records\n", deleted)
+			logger.Info("✓ Cleaned up %d old records\n", deleted)
 		}
 	}
 
 	// Connect to RPC
-	logInfo("Connecting to RPC: %s\n", config.RPCURL)
+	logger.Info("Connecting to RPC: %s\n", config.RPCURL)
 	txSender, err := NewTransactionSender(config.RPCURL)
 	if err != nil {
-		logError("Error connecting to RPC: %v\n", err)
+		logger.Error("Error connecting to RPC: %v\n", err)
 		os.Exit(1)
 	}
 	defer txSender.Close()
-	logInfo("✓ Connected to RPC\n")
+	logger.Info("✓ Connected to RPC\n")
 
 	// Connect to WebSocket if URL is provided (for faster receipt confirmations)
 	var wsManager *WebSocketManager
 	if config.WSURL != "" {
-		logInfo("Connecting to WebSocket: %s\n", config.WSURL)
+		logger.Info("Connecting to WebSocket: %s\n", config.WSURL)
 		wsManager = NewWebSocketManager(config.WSURL, config.WSReconnectDelay)
 		err = wsManager.Connect()
 		if err != nil {
-			logWarn("Could not connect to WebSocket (will use RPC polling): %v\n", err)
+			logger.Warn("Could not connect to WebSocket (will use RPC polling): %v\n", err)
 			wsManager = nil
 		} else {
 			defer wsManager.Close()
-			logInfo("✓ Connected to WebSocket\n")
+			logger.Info("✓ Connected to WebSocket\n")
 		}
 	} else {
-		logDebug("No WebSocket URL provided, will use RPC polling for receipts\n")
+		logger.Debug("No WebSocket URL provided, will use RPC polling for receipts\n")
 	}
 
 	// Get or generate mnemonic
 	var mnemonic string
 	if config.Mnemonic != "" {
-		logInfo("\nUsing provided mnemonic...\n")
+		logger.Info("\nUsing provided mnemonic...\n")
 		mnemonic = config.Mnemonic
 	} else {
-		logInfo("\nGenerating new mnemonic...\n")
+		logger.Info("\nGenerating new mnemonic...\n")
 		var err error
 		mnemonic, err = GenerateMnemonic()
 		if err != nil {
-			logError("Error generating mnemonic: %v\n", err)
+			logger.Error("Error generating mnemonic: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	// Generate wallets from single mnemonic
-	logInfo("Deriving %d wallets from mnemonic...\n", config.WalletCount)
+	logger.Info("Deriving %d wallets from mnemonic...\n", config.WalletCount)
 
 	wallets, err := DeriveWalletsFromMnemonic(mnemonic, config.WalletCount, txSender)
 	if err != nil {
-		logError("Error deriving wallets: %v\n", err)
+		logger.Error("Error deriving wallets: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Save mnemonic to file
 	err = SaveMnemonicToFile("mnemonic.txt", mnemonic)
 	if err != nil {
-		logWarn("Could not save mnemonic: %v\n", err)
+		logger.Warn("Could not save mnemonic: %v\n", err)
 	}
 
-	logInfo("✓ Generated %d wallets\n", len(wallets))
+	logger.Info("✓ Generated %d wallets\n", len(wallets))
 
 	// Save wallets to database
-	logInfo("\nSaving wallets to database...\n")
+	logger.Info("\nSaving wallets to database...\n")
 	for _, wallet := range wallets {
 		err := db.InsertWallet(wallet.Address.Hex(), wallet.DerivationPath)
 		if err != nil {
-			logWarn("Could not save wallet %s: %v\n", wallet.Address.Hex(), err)
+			logger.Warn("Could not save wallet %s: %v\n", wallet.Address.Hex(), err)
 		}
 	}
-	logInfo("✓ Wallets saved to database\n")
+	logger.Info("✓ Wallets saved to database\n")
 
 	// Display wallet addresses and balances
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Println("WALLET ADDRESSES AND BALANCES")
 	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println()
+	logger.Warn("Could not cleanup old records: %v\n", err)
 
-	ctx := context.Background()
 	allFunded := true
 
 	for i, wallet := range wallets {
-		balance, err := txSender.GetBalance(ctx, wallet.Address)
+		logger.Info("Connecting to RPC: %s\n", config.RPCURL)
 		if err != nil {
-			logDebug("[%d] %s\n", i+1, wallet.Address.Hex())
-			logError("    Balance: ERROR - %v\n", err)
+			logger.Debug("[%d] %s\n", i+1, wallet.Address.Hex())
+			logger.Error("Error connecting to RPC: %v\n", err)
 			allFunded = false
 		} else {
-			// Convert balance to ETH for display
+			balance, err := txSender.GetBalance(context.Background(), wallet.Address)
+			if err != nil {
+				logger.Debug("[%d] %s\n", i+1, wallet.Address.Hex())
+				logger.Error("Error fetching balance: %v\n", err)
+				allFunded = false
+				continue
+			}
+
 			balanceFloat := new(big.Float).SetInt(balance)
+			// Convert balance to ETH for display
+			logger.Info("✓ Connected to RPC\n")
 			ethValue := new(big.Float).Quo(balanceFloat, big.NewFloat(1e18))
 
 			fmt.Printf("[%d] %s\n", i+1, wallet.Address.Hex())
 			fmt.Printf("    Balance: %s wei (%.6f ETH)\n", balance.String(), ethValue)
-
+			logger.Info("Connecting to WebSocket: %s\n", config.WSURL)
 			// Check if balance is zero
 			if balance.Cmp(big.NewInt(0)) == 0 {
-				logWarn("    ⚠️  WARNING: Wallet has ZERO balance!\n")
-				allFunded = false
+				logger.Warn("    ⚠️  WARNING: Wallet has ZERO balance!\n")
+				logger.Warn("Could not connect to WebSocket (will use RPC polling): %v\n", err)
 			}
 		}
-		logDebug("\n")
+		logger.Info("✓ Connected to WebSocket\n")
 	}
 
-	fmt.Println(strings.Repeat("=", 60))
+	logger.Debug("No WebSocket URL provided, will use RPC polling for receipts\n")
 	if !allFunded {
 		fmt.Println("⚠️  WARNING: Some wallets have zero balance or errors!")
 	}
 	fmt.Println()
 
-	// Ask for user confirmation (only once) unless in automated mode
+	logger.Info("\nUsing provided mnemonic...\n")
 	if !config.AutomatedMode {
 		fmt.Print("Do you want to proceed with sending transactions? (y/n): ")
 		scanner := bufio.NewScanner(os.Stdin)
@@ -396,33 +225,32 @@ func main() {
 			os.Exit(0)
 		}
 
-		fmt.Println("\n✓ User confirmed. Proceeding with transactions...")
 	} else {
 		fmt.Println("\n✓ Automated mode enabled. Proceeding with transactions...")
 	}
-	fmt.Println()
 
 	var receiptWG sync.WaitGroup // WaitGroup for receipt confirmations
 
 	// Create worker pools ONCE (reused across all iterations in loop mode)
 	// Calculate buffer size for channels
-	bufferSize := config.BufferSize
+	bufferSize := LoadConfig().BufferSize
 	if bufferSize == 0 {
 		// Auto-calculate from wallet and transaction counts
 		bufferSize = config.WalletCount * config.TxPerWallet
-		logDebug("Auto-calculated buffer size: %d (WalletCount %d × TxPerWallet %d)\n", bufferSize, config.WalletCount, config.TxPerWallet)
+		logger.Debug("Auto-calculated buffer size: %d (WalletCount %d × TxPerWallet %d)\n", bufferSize, config.WalletCount, config.TxPerWallet)
 	} else {
-		logDebug("Using configured buffer size: %d\n", bufferSize)
+		logger.Debug("Using configured buffer size: %d\n", bufferSize)
 	}
 	receiptJobChan := make(chan ReceiptJob, config.WalletCount*config.TxPerWallet)
 	dbWriteChan := make(chan DBWriteJob, bufferSize)
-	var dbWriteWG sync.WaitGroup
+
+	dbWriteWG := sync.WaitGroup{}
 
 	// Start worker pools
 	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG, wsManager, db, txSender)
-	logInfo("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
+	logger.Info("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
 	startDBWriterPool(config.ReceiptWorkers, dbWriteChan, receiptJobChan, db, &dbWriteWG)
-	logInfo("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
+	logger.Info("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
 
 	// Check if we should run in loop mode
 	if config.RunDurationMinutes > 0 {
@@ -433,7 +261,6 @@ func main() {
 		fmt.Println("Running in SINGLE MODE")
 		fmt.Println()
 
-		// Record start time for single execution
 		executionStart := time.Now()
 
 		runSingleExecution(config, db, txSender, wsManager, wallets, dbWriteChan, &dbWriteWG)
@@ -446,7 +273,6 @@ func main() {
 			remainingSleep := minDuration - executionElapsed
 			fmt.Printf("\n⏱  Execution completed in %.6f seconds. Waiting %.6f seconds to maintain 1-second minimum...\n",
 				executionElapsed.Seconds(), remainingSleep.Seconds())
-			time.Sleep(remainingSleep)
 		} else {
 			fmt.Printf("\n⏱  Execution completed in %.6f seconds\n", executionElapsed.Seconds())
 		}
@@ -493,13 +319,13 @@ func runInLoopMode(config *Config, db *Database, wsManager *WebSocketManager, wa
 
 		txSender, err := NewTransactionSender(config.RPCURL)
 		if err != nil {
-			logError("Error connecting to RPC: %v\n", err)
+			logger.Error("Error connecting to RPC: %v\n", err)
 			os.Exit(1)
 		}
 		defer txSender.Close()
-
+		logger.Info("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
 		runSingleExecution(config, db, txSender, wsManager, wallets, dbWriteChan, dbWriteWG)
-
+		logger.Info("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
 		// Calculate elapsed time and ensure minimum 1 second per iteration
 		iterationElapsed := time.Since(iterationStart)
 		minDuration := 1 * time.Second
@@ -526,7 +352,7 @@ func runInLoopMode(config *Config, db *Database, wsManager *WebSocketManager, wa
 
 func runSingleExecution(config *Config, db *Database, txSender *TransactionSender, wsManager *WebSocketManager, wallets []*Wallet, dbWriteChan chan DBWriteJob, dbWriteWG *sync.WaitGroup) {
 	// Lock submission mutex to pause all workers during transaction submission
-	logDebug("🔒 Submission phase started - workers paused\n")
+	logger.Debug("🔒 Submission phase started - workers paused\n")
 
 	// Generate unique batch number for this execution
 	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
@@ -541,13 +367,13 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	value.SetString(config.ValueWei, 10)
 	toAddress := common.HexToAddress(config.ToAddress)
 
-	logInfo("\nTransaction Configuration:\n")
-	logInfo("  - Number of wallets: %d\n", len(wallets))
-	logInfo("  - Transactions per wallet: %d\n", config.TxPerWallet)
-	logInfo("  - Total transactions: %d\n", len(wallets)*config.TxPerWallet)
-	logInfo("  - Target address: %s\n", toAddress.Hex())
-	logInfo("  - Value per tx: %s wei\n", value.String())
-	logInfo("\n")
+	logger.Info("\nTransaction Configuration:\n")
+	logger.Info("  - Number of wallets: %d\n", len(wallets))
+	logger.Info("  - Transactions per wallet: %d\n", config.TxPerWallet)
+	logger.Info("  - Total transactions: %d\n", len(wallets)*config.TxPerWallet)
+	logger.Info("  - Target address: %s\n", toAddress.Hex())
+	logger.Info("  - Value per tx: %s wei\n", value.String())
+	logger.Info("\n")
 
 	// Use mutex for thread-safe counter updates
 	var wgSubmit sync.WaitGroup // Wait for transaction submissions only
@@ -562,7 +388,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 		go func(idx int, w *Wallet) {
 			defer wgSubmit.Done()
 
-			logDebug("\n[Wallet %d/%d] (%s)\n",
+			logger.Debug("\n[Wallet %d/%d] (%s)\n",
 				idx+1, len(wallets), w.Address.Hex())
 
 			// Prepare batch transactions with precalculated nonces
@@ -575,7 +401,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 			)
 
 			if err != nil {
-				logError("  Error preparing transactions: %v\n", err)
+				logger.Error("  Error preparing transactions: %v\n", err)
 				return
 			}
 
@@ -601,7 +427,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					dbTx.Error = err.Error()
 
 					// Print failure reason
-					logError("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
+					logger.Error("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
 
 					// Queue DB write only (no receipt needed for submission failures)
 					dbWriteChan <- DBWriteJob{Tx: dbTx}
@@ -609,7 +435,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					dbTx.TxHash = result.TxHash
 					dbTx.Status = "pending"
 
-					logDebug("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
+					logger.Debug("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
 
 					// Queue DB write + receipt job together.
 					// The DB writer will INSERT first, then dispatch the receipt job,
@@ -620,7 +446,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 				}
 			}
 
-			logInfo("  [W%d] ✓ Sent %d transactions (nonce %d to %d)\n",
+			logger.Info("  [W%d] ✓ Sent %d transactions (nonce %d to %d)\n",
 				idx+1,
 				len(txRequests),
 				txRequests[0].Nonce,
@@ -634,175 +460,13 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 	wgSubmit.Wait()
 	fmt.Println("✓ All transactions submitted")
 
-	logDebug("🔓 Submission phase completed - workers resumed\n")
+	logger.Debug("🔓 Submission phase completed - workers resumed\n")
 
 	fmt.Println("✓ Database writes queued (processing in background)")
 	fmt.Println("✓ Receipt confirmations queued (processing in background)")
 
-	// Launch background goroutine to print summary (non-blocking)
-	// This allows the next iteration to start immediately in loop mode
-	go func() {
-		fmt.Println()
-		fmt.Println(strings.Repeat("=", 60))
-		fmt.Println("=== Execution Summary ===")
-		fmt.Println()
-		fmt.Printf("Batch Number: %s\n", batchNumber)
-
-		// Get database statistics
-		stats, err := db.GetTransactionStats()
-		if err != nil {
-			fmt.Printf("Warning: Could not get database stats: %v\n", err)
-		} else {
-			fmt.Println("=== Database Statistics ===")
-			fmt.Println()
-			for key, value := range stats {
-				fmt.Printf("%s: %v\n", key, value)
-			}
-		}
-
-		fmt.Println()
-		fmt.Printf("✓ All data queued for database: %s\n", config.DBPath)
-		fmt.Println()
-		fmt.Println("Note: DB writes and receipt confirmations continue in background")
-	}()
-
-	// Return immediately after transactions are submitted (don't wait for summary)
-}
-
-// DBWriteJob bundles a transaction insert with an optional follow-up receipt job.
-// The receipt job (when non-nil) is dispatched to receiptJobChan only AFTER
-// the INSERT succeeds, preventing the UPDATE-before-INSERT race condition.
-type DBWriteJob struct {
-	Tx *Transaction
-}
-
-// startDBWriterPool starts a pool of workers that serialize inserts into SQLite.
-// Use workerCount=1 to avoid "database is locked" errors with SQLite.
-func startDBWriterPool(workerCount int, jobChan <-chan DBWriteJob, receiptJobChan chan ReceiptJob, db *Database, wg *sync.WaitGroup) {
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go dbWriterWorker(i+1, jobChan, receiptJobChan, db, wg)
-	}
-}
-
-// dbWriterWorker drains the DB write channel, inserting each transaction record,
-// then forwarding any associated receipt job to the receipt worker pool.
-func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, receiptJobChan chan ReceiptJob, db *Database, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for job := range jobChan {
-		if _, err := db.InsertTransaction(job.Tx); err != nil {
-			logWarn("[DBWriter %d] Could not save transaction to DB: %v\n", workerID, err)
-			continue
-		}
-		// Only dispatch the receipt job AFTER the INSERT is confirmed
-
-		receiptJobChan <- ReceiptJob{
-			TxHash:     job.Tx.TxHash,
-			Nonce:      job.Tx.Nonce,
-			RetryCount: 0,
-		}
-		logDebug("[DBWriter %d] Inserted tx (nonce %d) and dispatched receipt job\n", workerID, job.Tx.Nonce)
-
-	}
-}
-
-// startReceiptWorkerPool starts a pool of workers to process receipt confirmations
-func startReceiptWorkerPool(workerCount int, jobChan chan ReceiptJob, wg *sync.WaitGroup, wsManager *WebSocketManager, db *Database, txSender *TransactionSender) {
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go receiptWorker(i+1, jobChan, wg, wsManager, db, txSender)
-	}
-}
-
-const maxReceiptRetries = 3
-
-// receiptWorker processes receipt confirmation jobs from the job channel
-// with periodic connection refresh to prevent stale connections
-func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, wsManager *WebSocketManager, db *Database, txSender *TransactionSender) {
-	defer wg.Done()
-
-	// Process jobs from channel
-	for job := range jobChan {
-		shouldRetry := processReceiptJob(workerID, txSender, job, wsManager, db)
-		if shouldRetry {
-			if job.RetryCount < maxReceiptRetries {
-				job.RetryCount++
-				logWarn("  [Worker %d] Re-queuing tx (nonce %d) for retry %d/%d\n", workerID, job.Nonce, job.RetryCount, maxReceiptRetries)
-				jobChan <- job
-			} else {
-				logError("  [Worker %d] Tx (nonce %d) exceeded max retries (%d), marking failed\n", workerID, job.Nonce, maxReceiptRetries)
-				db.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "timeout after max retries")
-			}
-		}
-	}
-
-	// Cleanup RPC connection
-	if txSender != nil {
-		logDebug("[Worker %d] Closing RPC connection (%d jobs processed)\n", workerID)
-		txSender.Close()
-	}
-}
-
-// processReceiptJob processes a single receipt confirmation job.
-// Returns true if the job should be retried (i.e. it timed out).
-func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob, wsManager *WebSocketManager, db *Database) bool {
-	// Wait for receipt with timeout - use shared WebSocket if available
-	ctx := context.Background()
-	// get was client
-
-	var wsClient *ethclient.Client
-	if wsManager != nil {
-		wsClient = wsManager.GetClient()
-	}
-
-	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, wsClient, common.HexToHash(job.TxHash), 60*time.Second)
-
-	if receiptErr != nil {
-		// If this was a timeout, signal to the caller to re-queue the job
-		if strings.Contains(receiptErr.Error(), "timeout waiting for transaction receipt") {
-			logWarn("  [W%d] Tx (nonce %d): ⏱ timed out (retry %d/%d)\n", workerID, job.Nonce, job.RetryCount+1, maxReceiptRetries)
-			return true
-		}
-		// For non-timeout errors, mark as failed immediately
-		db.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", receiptErr.Error())
-		logWarn("  [W%d] Tx (nonce %d): ✗ error - %v\n", workerID, job.Nonce, receiptErr)
-		return false
-	} else {
-		// Get block header to retrieve block timestamp
-		blockHeader, err := txSender.client.HeaderByHash(ctx, receipt.BlockHash)
-		var confirmedAt time.Time
-		if err != nil {
-			// Fallback to current time if block fetch fails
-			logWarn("  [W%d] Could not fetch block header, using current time: %v\n", workerID, err)
-			confirmedAt = time.Now()
-		} else {
-			// Use block creation time from the receipt's block
-			confirmedAt = time.Unix(int64(blockHeader.Time), 0)
-		}
-
-		// Check for negative/zero block timestamp relative to submission time
-		if confirmedAt.Before(job.StartTime) {
-			logWarn("  [W%d] Block timestamp before submission time, adjusting\n", workerID)
-			confirmedAt = job.StartTime.Add(1 * time.Second)
-		}
-
-		// Extract gas information from receipt
-		gasUsed := receipt.GasUsed
-		effectiveGasPrice := ""
-		if receipt.EffectiveGasPrice != nil {
-			effectiveGasPrice = receipt.EffectiveGasPrice.String()
-		}
-
-		confirmationTime := confirmedAt.Sub(job.StartTime).Seconds()
-		if receipt.Status == 1 {
-			db.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, gasUsed, effectiveGasPrice, "")
-			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", workerID, job.Nonce, confirmationTime, gasUsed)
-		} else {
-			db.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, gasUsed, effectiveGasPrice, "transaction reverted")
-			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", workerID, job.Nonce)
-		}
-		return false
-	}
+	// Return immediately after transactions are submitted; analysis and summaries
+	// can be performed later using the provided tooling (e.g. analyze.sh).
 }
 
 func LoadConfig() *Config {
@@ -825,9 +489,6 @@ func LoadConfig() *Config {
 		WSReconnectDelay:   getEnvInt("WS_RECONNECT_DELAY", DefaultWSReconnectDelay),
 		BufferSize:         getEnvInt("BUFFER_SIZE", DefaultBufferSize),
 	}
-
-	// Set global log level
-	currentLogLevel = parseLogLevel(config.LogLevel)
 
 	return config
 }

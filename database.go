@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"go-tps/logger"
+
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -133,7 +135,7 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	logDebug("[DB] INSERT tx_hash=%s status=%s nonce=%d wallet=%s\n", tx.TxHash, tx.Status, tx.Nonce, tx.WalletAddress)
+	logger.Debug("[DB] INSERT tx_hash=%s status=%s nonce=%d wallet=%s\n", tx.TxHash, tx.Status, tx.Nonce, tx.WalletAddress)
 
 	result, err := d.db.Exec(query,
 		tx.BatchNumber,
@@ -154,18 +156,18 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 	)
 
 	if err != nil {
-		logError("[DB] INSERT FAILED tx_hash=%s error=%v\n", tx.TxHash, err)
+		logger.Error("[DB] INSERT FAILED tx_hash=%s error=%v\n", tx.TxHash, err)
 		return 0, fmt.Errorf("failed to insert transaction: %w", err)
 	}
 
 	id, err := result.LastInsertId()
-	logDebug("[DB] INSERT OK tx_hash=%s id=%d\n", tx.TxHash, id)
+	logger.Debug("[DB] INSERT OK tx_hash=%s id=%d\n", tx.TxHash, id)
 	return id, err
 }
 
 func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *time.Time, gasUsed uint64, effectiveGasPrice string, errMsg string) error {
 
-	logDebug("[DB] UPDATE tx_hash=%s status=%s gas_used=%d err=%q\n", txHash, status, gasUsed, errMsg)
+	logger.Debug("[DB] UPDATE tx_hash=%s status=%s gas_used=%d err=%q\n", txHash, status, gasUsed, errMsg)
 
 	query := `
 		UPDATE transactions 
@@ -175,11 +177,11 @@ func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *t
 
 	_, err := d.db.Exec(query, status, confirmedAt, gasUsed, effectiveGasPrice, errMsg, txHash)
 	if err != nil {
-		logError("[DB] UPDATE FAILED tx_hash=%s error=%v\n", txHash, err)
+		logger.Error("[DB] UPDATE FAILED tx_hash=%s error=%v\n", txHash, err)
 		return fmt.Errorf("failed to update transaction: %w", err)
 	}
 
-	logDebug("[DB] UPDATE OK tx_hash=%s\n", txHash)
+	logger.Debug("[DB] UPDATE OK tx_hash=%s\n", txHash)
 	return nil
 }
 
