@@ -29,13 +29,13 @@ const (
 	DefaultValueWei           = "1000000000000000" // 0.001 ETH
 	DefaultToAddress          = "0x0000000000000000000000000000000000000001"
 	DefaultRunDurationMinutes = 0       // 0 = run once, >0 = loop for duration
-	DefaultReceiptWorkers     = 10      // Number of concurrent workers for receipt confirmation
+	DefaultReceiptWorkers     = 4       // Tuned for small machines; override with RECEIPT_WORKERS
 	DefaultLogLevel           = "DEBUG" // DEBUG, INFO, WARN, ERROR
 	DefaultAutomatedMode      = false   // true = skip user confirmation
 	DefaultContextTimeout     = 30      // seconds for RPC calls
 	DefaultDBRetentionDays    = 30      // cleanup records older than this
 	DefaultWSReconnectDelay   = 5       // seconds before reconnecting WebSocket
-	DefaultBufferSize         = 1000    // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
+	DefaultBufferSize         = 500     // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
 )
 
 // (logging implementation moved to the logger package)
@@ -230,7 +230,7 @@ func main() {
 
 	// Create worker pools ONCE (reused across all iterations in loop mode)
 	// Calculate buffer size for channels
-	bufferSize := LoadConfig().BufferSize
+	bufferSize := config.BufferSize
 	if bufferSize == 0 {
 		// Auto-calculate from wallet and transaction counts
 		bufferSize = config.WalletCount * config.TxPerWallet
@@ -319,10 +319,10 @@ func runInLoopMode(config *Config, db *dbpkg.Database, wsManager *worker.WebSock
 			logger.Error("Error connecting to RPC: %v\n", err)
 			os.Exit(1)
 		}
-		defer txSender.Close()
 		logger.Info("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
 		runSingleExecution(config, db, txSender, wsManager, wallets, dbWriteChan, dbWriteWG)
 		logger.Info("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
+		txSender.Close()
 		// Calculate elapsed time and ensure minimum 1 second per iteration
 		iterationElapsed := time.Since(iterationStart)
 		minDuration := 1 * time.Second

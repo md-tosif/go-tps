@@ -40,8 +40,10 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+	// On small machines (e.g. 2 vCPU / 4GB), a small pool
+	// keeps memory use low while still allowing some concurrency.
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(0)
 
 	if err := createTables(db); err != nil {
