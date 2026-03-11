@@ -183,6 +183,15 @@ func main() {
 
 	for i, w := range wallets {
 
+		wallets[i].Nonce, err = txSender.GetNonce(context.Background(), w.Address)
+
+		if err != nil {
+			logger.Debug("[%d] %s\n", i+1, w.Address.Hex())
+			logger.Error("Error fetching nonce: %v\n", err)
+			allFunded = false
+			continue
+		}
+
 		balance, err := txSender.GetBalance(context.Background(), w.Address)
 		if err != nil {
 			logger.Debug("[%d] %s\n", i+1, w.Address.Hex())
