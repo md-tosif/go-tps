@@ -36,8 +36,8 @@ const (
 	DefaultDBRetentionDays    = 30      // cleanup records older than this
 	DefaultWSReconnectDelay   = 5       // seconds before reconnecting WebSocket
 	DefaultBufferSize         = 500     // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
-	DefaultDBMaxOpenConns     = 25      // max open DB connections
-	DefaultDBMaxIdleConns     = 2       // max idle DB connections
+	DefaultDBMaxOpenConns     = 15      // max open DB connections
+	DefaultDBMaxIdleConns     = 5       // max idle DB connections
 )
 
 // (logging implementation moved to the logger package)
