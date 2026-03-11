@@ -160,7 +160,6 @@ type ReceiptJob struct {
 	TxHash     string
 	Nonce      uint64
 	StartTime  time.Time
-	WalletNum  int
 	RetryCount int // number of times this job has been retried due to timeout
 }
 
@@ -610,13 +609,6 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					// ensuring UPDATE never runs before INSERT.
 					dbWriteChan <- DBWriteJob{
 						Tx: dbTx,
-						ReceiptJob: &ReceiptJob{
-
-							TxHash:    result.TxHash,
-							Nonce:     req.Nonce,
-							StartTime: result.SubmittedAt,
-							WalletNum: idx + 1,
-						},
 					}
 				}
 			}
@@ -674,8 +666,7 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 // The receipt job (when non-nil) is dispatched to receiptJobChan only AFTER
 // the INSERT succeeds, preventing the UPDATE-before-INSERT race condition.
 type DBWriteJob struct {
-	Tx         *Transaction
-	ReceiptJob *ReceiptJob // nil for failed/no-receipt transactions
+	Tx *Transaction
 }
 
 // startDBWriterPool starts a pool of workers that serialize inserts into SQLite.
@@ -697,9 +688,14 @@ func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, receiptJobChan chan
 			continue
 		}
 		// Only dispatch the receipt job AFTER the INSERT is confirmed
-		if job.ReceiptJob != nil {
-			receiptJobChan <- *job.ReceiptJob
+
+		receiptJobChan <- ReceiptJob{
+			TxHash:     job.Tx.TxHash,
+			Nonce:      job.Tx.Nonce,
+			RetryCount: 0,
 		}
+		logDebug("[DBWriter %d] Inserted tx (nonce %d) and dispatched receipt job\n", workerID, job.Tx.Nonce)
+
 	}
 }
 
@@ -757,12 +753,12 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 	if receiptErr != nil {
 		// If this was a timeout, signal to the caller to re-queue the job
 		if strings.Contains(receiptErr.Error(), "timeout waiting for transaction receipt") {
-			logWarn("  [W%d] Tx (nonce %d): ⏱ timed out (retry %d/%d)\n", job.WalletNum, job.Nonce, job.RetryCount+1, maxReceiptRetries)
+			logWarn("  [W%d] Tx (nonce %d): ⏱ timed out (retry %d/%d)\n", workerID, job.Nonce, job.RetryCount+1, maxReceiptRetries)
 			return true
 		}
 		// For non-timeout errors, mark as failed immediately
 		db.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", receiptErr.Error())
-		logWarn("  [W%d] Tx (nonce %d): ✗ error - %v\n", job.WalletNum, job.Nonce, receiptErr)
+		logWarn("  [W%d] Tx (nonce %d): ✗ error - %v\n", workerID, job.Nonce, receiptErr)
 		return false
 	} else {
 		// Get block header to retrieve block timestamp
@@ -770,7 +766,7 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 		var confirmedAt time.Time
 		if err != nil {
 			// Fallback to current time if block fetch fails
-			logWarn("  [W%d] Could not fetch block header, using current time: %v\n", job.WalletNum, err)
+			logWarn("  [W%d] Could not fetch block header, using current time: %v\n", workerID, err)
 			confirmedAt = time.Now()
 		} else {
 			// Use block creation time from the receipt's block
@@ -779,7 +775,7 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 
 		// Check for negative/zero block timestamp relative to submission time
 		if confirmedAt.Before(job.StartTime) {
-			logWarn("  [W%d] Block timestamp before submission time, adjusting\n", job.WalletNum)
+			logWarn("  [W%d] Block timestamp before submission time, adjusting\n", workerID)
 			confirmedAt = job.StartTime.Add(1 * time.Second)
 		}
 
@@ -793,10 +789,10 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 		confirmationTime := confirmedAt.Sub(job.StartTime).Seconds()
 		if receipt.Status == 1 {
 			db.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, gasUsed, effectiveGasPrice, "")
-			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", job.WalletNum, job.Nonce, confirmationTime, gasUsed)
+			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", workerID, job.Nonce, confirmationTime, gasUsed)
 		} else {
 			db.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, gasUsed, effectiveGasPrice, "transaction reverted")
-			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", job.WalletNum, job.Nonce)
+			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", workerID, job.Nonce)
 		}
 		return false
 	}
