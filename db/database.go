@@ -33,17 +33,15 @@ type Database struct {
 	db *sql.DB
 }
 
-func NewDatabase(dbPath string) (*Database, error) {
+func NewDatabase(dbPath string, maxOpenConns, maxIdleConns int) (*Database, error) {
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-64000", dbPath)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// On small machines (e.g. 2 vCPU / 4GB), a small pool
-	// keeps memory use low while still allowing some concurrency.
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxIdleConns)
 	db.SetConnMaxLifetime(0)
 
 	if err := createTables(db); err != nil {

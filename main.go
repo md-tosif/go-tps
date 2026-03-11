@@ -36,6 +36,8 @@ const (
 	DefaultDBRetentionDays    = 30      // cleanup records older than this
 	DefaultWSReconnectDelay   = 5       // seconds before reconnecting WebSocket
 	DefaultBufferSize         = 500     // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
+	DefaultDBMaxOpenConns     = 25      // max open DB connections
+	DefaultDBMaxIdleConns     = 2       // max idle DB connections
 )
 
 // (logging implementation moved to the logger package)
@@ -57,6 +59,8 @@ type Config struct {
 	DBRetentionDays    int  // Cleanup records older than this
 	WSReconnectDelay   int  // Seconds before reconnecting WebSocket
 	BufferSize         int  // Channel buffer size (0 = auto-calculate)
+	DBMaxOpenConns     int  // Max open SQLite connections
+	DBMaxIdleConns     int  // Max idle SQLite connections
 }
 
 func main() {
@@ -82,7 +86,7 @@ func main() {
 
 	// Initialize database
 	logger.Info("Initializing database...\n")
-	db, err := dbpkg.NewDatabase(config.DBPath)
+	db, err := dbpkg.NewDatabase(config.DBPath, config.DBMaxOpenConns, config.DBMaxIdleConns)
 	if err != nil {
 		logger.Error("Error initializing database: %v\n", err)
 		os.Exit(1)
@@ -253,14 +257,14 @@ func main() {
 	if config.RunDurationMinutes > 0 {
 		fmt.Printf("Running in LOOP MODE for %d minutes\n", config.RunDurationMinutes)
 		fmt.Println()
-		runInLoopMode(config, db, wsManager, wallets, dbWriteChan, &dbWriteWG)
+		runInLoopMode(config, wallets, dbWriteChan, &dbWriteWG)
 	} else {
 		fmt.Println("Running in SINGLE MODE")
 		fmt.Println()
 
 		executionStart := time.Now()
 
-		runSingleExecution(config, db, txSender, wallets, dbWriteChan, &dbWriteWG)
+		runSingleExecution(config, txSender, wallets, dbWriteChan, &dbWriteWG)
 
 		// Calculate elapsed time and ensure minimum 1 second
 		executionElapsed := time.Since(executionStart)
@@ -295,7 +299,7 @@ func main() {
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runInLoopMode(config *Config, db *dbpkg.Database, wsManager *worker.WebSocketManager, wallets []*wallet.Wallet, dbWriteChan chan worker.DBWriteJob, dbWriteWG *sync.WaitGroup) {
+func runInLoopMode(config *Config, wallets []*wallet.Wallet, dbWriteChan chan worker.DBWriteJob, dbWriteWG *sync.WaitGroup) {
 	duration := time.Duration(config.RunDurationMinutes) * time.Minute
 	startTime := time.Now()
 	endTime := startTime.Add(duration)
@@ -320,7 +324,7 @@ func runInLoopMode(config *Config, db *dbpkg.Database, wsManager *worker.WebSock
 			os.Exit(1)
 		}
 		logger.Info("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
-		runSingleExecution(config, db, txSender, wallets, dbWriteChan, dbWriteWG)
+		runSingleExecution(config, txSender, wallets, dbWriteChan, dbWriteWG)
 		logger.Info("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
 		txSender.Close()
 		// Calculate elapsed time and ensure minimum 1 second per iteration
@@ -347,7 +351,7 @@ func runInLoopMode(config *Config, db *dbpkg.Database, wsManager *worker.WebSock
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func runSingleExecution(config *Config, db *dbpkg.Database, txSender *txpkg.TransactionSender, wallets []*wallet.Wallet, dbWriteChan chan worker.DBWriteJob, dbWriteWG *sync.WaitGroup) {
+func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, wallets []*wallet.Wallet, dbWriteChan chan worker.DBWriteJob, dbWriteWG *sync.WaitGroup) {
 	// Lock submission mutex to pause all workers during transaction submission
 	logger.Debug("🔒 Submission phase started - workers paused\n")
 
@@ -485,6 +489,8 @@ func LoadConfig() *Config {
 		DBRetentionDays:    getEnvInt("DB_RETENTION_DAYS", DefaultDBRetentionDays),
 		WSReconnectDelay:   getEnvInt("WS_RECONNECT_DELAY", DefaultWSReconnectDelay),
 		BufferSize:         getEnvInt("BUFFER_SIZE", DefaultBufferSize),
+		DBMaxOpenConns:     getEnvInt("DB_MAX_OPEN_CONNS", DefaultDBMaxOpenConns),
+		DBMaxIdleConns:     getEnvInt("DB_MAX_IDLE_CONNS", DefaultDBMaxIdleConns),
 	}
 
 	return config
