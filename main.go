@@ -30,7 +30,6 @@ const (
 	DefaultLogLevel           = "DEBUG" // DEBUG, INFO, WARN, ERROR
 	DefaultAutomatedMode      = false   // true = skip user confirmation
 	DefaultContextTimeout     = 30      // seconds for RPC calls
-	DefaultConnectionRefresh  = 100     // refresh connection every N jobs
 	DefaultDBRetentionDays    = 30      // cleanup records older than this
 	DefaultWSReconnectDelay   = 5       // seconds before reconnecting WebSocket
 	DefaultBufferSize         = 1000    // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
@@ -151,7 +150,6 @@ type Config struct {
 	LogLevel           string
 	AutomatedMode      bool // Skip user confirmation if true
 	ContextTimeout     int  // Timeout for RPC calls in seconds
-	ConnectionRefresh  int  // Refresh connections every N jobs
 	DBRetentionDays    int  // Cleanup records older than this
 	WSReconnectDelay   int  // Seconds before reconnecting WebSocket
 	BufferSize         int  // Channel buffer size (0 = auto-calculate)
@@ -159,9 +157,6 @@ type Config struct {
 
 // ReceiptJob represents a receipt confirmation job
 type ReceiptJob struct {
-	DB         *Database
-	RPCURL     string
-	WSClient   *ethclient.Client
 	TxHash     string
 	Nonce      uint64
 	StartTime  time.Time
@@ -425,7 +420,7 @@ func main() {
 	var dbWriteWG sync.WaitGroup
 
 	// Start worker pools
-	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG)
+	startReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG, wsManager, db, txSender)
 	logInfo("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
 	startDBWriterPool(config.ReceiptWorkers, dbWriteChan, receiptJobChan, db, &dbWriteWG)
 	logInfo("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
@@ -613,16 +608,10 @@ func runSingleExecution(config *Config, db *Database, txSender *TransactionSende
 					// Queue DB write + receipt job together.
 					// The DB writer will INSERT first, then dispatch the receipt job,
 					// ensuring UPDATE never runs before INSERT.
-					var wsClient *ethclient.Client
-					if wsManager != nil {
-						wsClient = wsManager.GetClient()
-					}
 					dbWriteChan <- DBWriteJob{
 						Tx: dbTx,
 						ReceiptJob: &ReceiptJob{
-							DB:        db,
-							RPCURL:    config.RPCURL,
-							WSClient:  wsClient,
+
 							TxHash:    result.TxHash,
 							Nonce:     req.Nonce,
 							StartTime: result.SubmittedAt,
@@ -715,10 +704,10 @@ func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, receiptJobChan chan
 }
 
 // startReceiptWorkerPool starts a pool of workers to process receipt confirmations
-func startReceiptWorkerPool(workerCount int, jobChan chan ReceiptJob, wg *sync.WaitGroup) {
+func startReceiptWorkerPool(workerCount int, jobChan chan ReceiptJob, wg *sync.WaitGroup, wsManager *WebSocketManager, db *Database, txSender *TransactionSender) {
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go receiptWorker(i+1, jobChan, wg)
+		go receiptWorker(i+1, jobChan, wg, wsManager, db, txSender)
 	}
 }
 
@@ -726,40 +715,12 @@ const maxReceiptRetries = 3
 
 // receiptWorker processes receipt confirmation jobs from the job channel
 // with periodic connection refresh to prevent stale connections
-func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup) {
+func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, wsManager *WebSocketManager, db *Database, txSender *TransactionSender) {
 	defer wg.Done()
-
-	var txSender *TransactionSender
-	var currentRPCURL string
-	jobsProcessed := 0
-	connectionRefreshInterval := 100 // Refresh connection every 100 jobs
 
 	// Process jobs from channel
 	for job := range jobChan {
-
-		// Initialize, refresh, or reuse RPC connection
-		needsRefresh := txSender == nil ||
-			currentRPCURL != job.RPCURL ||
-			jobsProcessed >= connectionRefreshInterval
-
-		if needsRefresh {
-			if txSender != nil {
-				logDebug("[Worker %d] Refreshing RPC connection after %d jobs\n", workerID, jobsProcessed)
-				txSender.Close()
-			}
-			var err error
-			txSender, err = NewTransactionSender(job.RPCURL)
-			if err != nil {
-				logError("[Worker %d] Could not connect to RPC: %v\n", workerID, err)
-				continue
-			}
-			currentRPCURL = job.RPCURL
-			jobsProcessed = 0
-		}
-
-		shouldRetry := processReceiptJob(workerID, txSender, job)
-		jobsProcessed++
-
+		shouldRetry := processReceiptJob(workerID, txSender, job, wsManager, db)
 		if shouldRetry {
 			if job.RetryCount < maxReceiptRetries {
 				job.RetryCount++
@@ -767,24 +728,31 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup) {
 				jobChan <- job
 			} else {
 				logError("  [Worker %d] Tx (nonce %d) exceeded max retries (%d), marking failed\n", workerID, job.Nonce, maxReceiptRetries)
-				job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "timeout after max retries")
+				db.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "timeout after max retries")
 			}
 		}
 	}
 
 	// Cleanup RPC connection
 	if txSender != nil {
-		logDebug("[Worker %d] Closing RPC connection (%d jobs processed)\n", workerID, jobsProcessed)
+		logDebug("[Worker %d] Closing RPC connection (%d jobs processed)\n", workerID)
 		txSender.Close()
 	}
 }
 
 // processReceiptJob processes a single receipt confirmation job.
 // Returns true if the job should be retried (i.e. it timed out).
-func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob) bool {
+func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob, wsManager *WebSocketManager, db *Database) bool {
 	// Wait for receipt with timeout - use shared WebSocket if available
 	ctx := context.Background()
-	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, job.WSClient, common.HexToHash(job.TxHash), 60*time.Second)
+	// get was client
+
+	var wsClient *ethclient.Client
+	if wsManager != nil {
+		wsClient = wsManager.GetClient()
+	}
+
+	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, wsClient, common.HexToHash(job.TxHash), 60*time.Second)
 
 	if receiptErr != nil {
 		// If this was a timeout, signal to the caller to re-queue the job
@@ -793,7 +761,7 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 			return true
 		}
 		// For non-timeout errors, mark as failed immediately
-		job.DB.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", receiptErr.Error())
+		db.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", receiptErr.Error())
 		logWarn("  [W%d] Tx (nonce %d): ✗ error - %v\n", job.WalletNum, job.Nonce, receiptErr)
 		return false
 	} else {
@@ -824,10 +792,10 @@ func processReceiptJob(workerID int, txSender *TransactionSender, job ReceiptJob
 
 		confirmationTime := confirmedAt.Sub(job.StartTime).Seconds()
 		if receipt.Status == 1 {
-			job.DB.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, gasUsed, effectiveGasPrice, "")
+			db.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, gasUsed, effectiveGasPrice, "")
 			logInfo("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", job.WalletNum, job.Nonce, confirmationTime, gasUsed)
 		} else {
-			job.DB.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, gasUsed, effectiveGasPrice, "transaction reverted")
+			db.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, gasUsed, effectiveGasPrice, "transaction reverted")
 			logWarn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", job.WalletNum, job.Nonce)
 		}
 		return false
@@ -850,7 +818,6 @@ func LoadConfig() *Config {
 		LogLevel:           getEnv("LOG_LEVEL", DefaultLogLevel),
 		AutomatedMode:      getEnvBool("AUTOMATED_MODE", DefaultAutomatedMode),
 		ContextTimeout:     getEnvInt("CONTEXT_TIMEOUT", DefaultContextTimeout),
-		ConnectionRefresh:  getEnvInt("CONNECTION_REFRESH", DefaultConnectionRefresh),
 		DBRetentionDays:    getEnvInt("DB_RETENTION_DAYS", DefaultDBRetentionDays),
 		WSReconnectDelay:   getEnvInt("WS_RECONNECT_DELAY", DefaultWSReconnectDelay),
 		BufferSize:         getEnvInt("BUFFER_SIZE", DefaultBufferSize),
