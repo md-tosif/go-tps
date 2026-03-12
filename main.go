@@ -38,6 +38,7 @@ const (
 	DefaultBufferSize         = 500     // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
 	DefaultDBMaxOpenConns     = 15      // max open DB connections
 	DefaultDBMaxIdleConns     = 5       // max idle DB connections
+	DefaultSleepMinutes       = 0       // minutes to sleep before submitting transactions
 )
 
 // (logging implementation moved to the logger package)
@@ -61,6 +62,7 @@ type Config struct {
 	BufferSize         int  // Channel buffer size (0 = auto-calculate)
 	DBMaxOpenConns     int  // Max open SQLite connections
 	DBMaxIdleConns     int  // Max idle SQLite connections
+	SleepMinutes       int  // Minutes to sleep before submitting transactions
 }
 
 func main() {
@@ -387,6 +389,13 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 	logger.Info("  - Value per tx: %s wei\n", value.String())
 	logger.Info("\n")
 
+	// Sleep before starting transaction submission if configured
+	if config.SleepMinutes > 0 {
+		fmt.Printf("Sleeping for %d minutes before starting transaction submission...\n", config.SleepMinutes)
+		time.Sleep(time.Duration(config.SleepMinutes) * time.Minute)
+		fmt.Println("Sleep completed.")
+	}
+
 	// Use mutex for thread-safe counter updates
 	var wgSubmit sync.WaitGroup // Wait for transaction submissions only
 	// Receipt confirmations happen in background, we don't wait for them
@@ -521,6 +530,7 @@ func LoadConfig() *Config {
 		BufferSize:         getEnvInt("BUFFER_SIZE", DefaultBufferSize),
 		DBMaxOpenConns:     getEnvInt("DB_MAX_OPEN_CONNS", DefaultDBMaxOpenConns),
 		DBMaxIdleConns:     getEnvInt("DB_MAX_IDLE_CONNS", DefaultDBMaxIdleConns),
+		SleepMinutes:       getEnvInt("SLEEP_MINUTES", DefaultSleepMinutes),
 	}
 
 	return config
