@@ -251,6 +251,12 @@ func main() {
 	} else {
 		logger.Debug("Using configured buffer size: %d\n", bufferSize)
 	}
+	// Always ensure the buffer is at least large enough for all transactions so
+	// wallet goroutines never block on a full channel while DB writers are slow.
+	if minBuf := config.WalletCount * config.TxPerWallet; bufferSize < minBuf {
+		logger.Debug("Expanding buffer size from %d to %d (WalletCount × TxPerWallet)\n", bufferSize, minBuf)
+		bufferSize = minBuf
+	}
 	receiptJobChan := make(chan worker.ReceiptJob, config.WalletCount*config.TxPerWallet)
 	dbWriteChan := make(chan worker.DBWriteJob, bufferSize)
 
@@ -368,10 +374,6 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 	batchNumber := fmt.Sprintf("batch-%s", time.Now().Format("20060102-150405"))
 	fmt.Printf("Batch Number: %s\n\n", batchNumber)
 
-	// Create context with timeout for this execution
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.ContextTimeout)*time.Second)
-	defer cancel()
-
 	// Parse configuration values
 	value := new(big.Int)
 	value.SetString(config.ValueWei, 10)
@@ -401,9 +403,14 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 			logger.Debug("\n[Wallet %d/%d] (%s)\n",
 				idx+1, len(wallets), w.Address.Hex())
 
+			// Each wallet gets its own context so a slow wallet cannot
+			// consume the shared timeout and stall all other goroutines.
+			wCtx, wCancel := context.WithTimeout(context.Background(), time.Duration(config.ContextTimeout)*time.Second)
+			defer wCancel()
+
 			// Prepare batch transactions with precalculated nonces
 			txRequests, err := txSender.PrepareBatchTransactions(
-				ctx,
+				wCtx,
 				w,
 				toAddress,
 				value,
@@ -417,7 +424,22 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 
 			// Send all transactions for this wallet
 			for txIdx, req := range txRequests {
-				result, err := txSender.CreateAndSendTransaction(ctx, req)
+				// Per-transaction context so one hung RPC call doesn't block
+				// the wallet goroutine longer than ContextTimeout seconds.
+				txCtx, txCancel := context.WithTimeout(context.Background(), time.Duration(config.ContextTimeout)*time.Second)
+				result, err := txSender.CreateAndSendTransaction(txCtx, req)
+				txCancel()
+
+				// Guard against nil result (returned when CreateTransaction or
+				// SignTransaction fails before any RPC call is made).
+				var submittedAt time.Time
+				var execTime float64
+				if result != nil {
+					submittedAt = result.SubmittedAt
+					execTime = result.ExecutionTime
+				} else {
+					submittedAt = time.Now()
+				}
 
 				// Create database transaction record
 				dbTx := &dbpkg.Transaction{
@@ -428,8 +450,8 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 					Value:         value.String(),
 					GasPrice:      req.GasPrice.String(),
 					GasLimit:      req.GasLimit,
-					SubmittedAt:   result.SubmittedAt,
-					ExecutionTime: result.ExecutionTime,
+					SubmittedAt:   submittedAt,
+					ExecutionTime: execTime,
 				}
 
 				if err != nil {
@@ -438,21 +460,20 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 
 					// Print failure reason
 					logger.Error("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
-
-					// Queue DB write only (no receipt needed for submission failures)
-					dbWriteChan <- worker.DBWriteJob{Tx: dbTx}
 				} else {
 					dbTx.TxHash = result.TxHash
 					dbTx.Status = "pending"
 
 					logger.Debug("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
+				}
 
-					// Queue DB write + receipt job together.
-					// The DB writer will INSERT first, then dispatch the receipt job,
-					// ensuring UPDATE never runs before INSERT.
-					dbWriteChan <- worker.DBWriteJob{
-						Tx: dbTx,
-					}
+				// Queue DB write. Use a select so the goroutine can exit
+				// if the process is shutting down instead of blocking forever.
+				select {
+				case dbWriteChan <- worker.DBWriteJob{Tx: dbTx}:
+				case <-wCtx.Done():
+					logger.Warn("  [W%d] Context expired while queuing DB write for nonce %d; dropping record\n", idx+1, req.Nonce)
+					return
 				}
 			}
 

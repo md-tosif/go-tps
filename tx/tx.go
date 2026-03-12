@@ -26,6 +26,7 @@ type TxRequest struct {
 	Nonce     uint64
 	GasPrice  *big.Int
 	GasLimit  uint64
+	signedTx  *types.Transaction
 }
 
 type TxResult struct {
@@ -126,17 +127,7 @@ func (ts *TransactionSender) SendTransaction(ctx context.Context, signedTx *type
 }
 
 func (ts *TransactionSender) CreateAndSendTransaction(ctx context.Context, req *TxRequest) (*TxResult, error) {
-	tx, err := ts.CreateTransaction(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transaction: %w", err)
-	}
-
-	signedTx, err := ts.SignTransaction(tx, req.Wallet)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign transaction: %w", err)
-	}
-
-	result, err := ts.SendTransaction(ctx, signedTx)
+	result, err := ts.SendTransaction(ctx, req.signedTx)
 	if err != nil {
 		return result, err
 	}
@@ -244,14 +235,28 @@ func (ts *TransactionSender) PrepareBatchTransactions(ctx context.Context, w *wa
 
 	requests := make([]*TxRequest, 0, count)
 	for i := 0; i < count; i++ {
-		requests = append(requests, &TxRequest{
+		req := TxRequest{
 			Wallet:    w,
 			ToAddress: w.Address,
 			Value:     value,
 			Nonce:     startNonce + uint64(i),
 			GasPrice:  gasPrice,
 			GasLimit:  21000,
-		})
+		}
+
+		tx, err := ts.CreateTransaction(&req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create transaction: %w", err)
+		}
+
+		signedTx, err := ts.SignTransaction(tx, req.Wallet)
+		if err != nil {
+			return nil, fmt.Errorf("failed to sign transaction: %w", err)
+		}
+
+		req.signedTx = signedTx
+		requests = append(requests, &req)
+
 	}
 	w.Nonce += uint64(count)
 	return requests, nil

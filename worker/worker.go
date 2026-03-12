@@ -135,6 +135,7 @@ const maxReceiptRetries = 3
 func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, wsManager *WebSocketManager, database *db.Database, txSender *tx.TransactionSender) {
 	defer wg.Done()
 
+	jobsProcessed := 0
 	for job := range jobChan {
 		shouldRetry := processReceiptJob(workerID, txSender, job, wsManager, database)
 		if shouldRetry {
@@ -146,11 +147,13 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, ws
 				logger.Error("  [Worker %d] Tx (nonce %d) exceeded max retries (%d), marking failed\n", workerID, job.Nonce, maxReceiptRetries)
 				database.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "timeout after max retries")
 			}
+		} else {
+			jobsProcessed++
 		}
 	}
 
 	if txSender != nil {
-		logger.Debug("[Worker %d] Closing RPC connection (%d jobs processed)\n", workerID)
+		logger.Debug("[Worker %d] Closing RPC connection (%d jobs processed)\n", workerID, jobsProcessed)
 		txSender.Close()
 	}
 }
