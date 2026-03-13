@@ -142,7 +142,16 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, ws
 			if job.RetryCount < maxReceiptRetries {
 				job.RetryCount++
 				logger.Warn("  [Worker %d] Re-queuing tx (nonce %d) for retry %d/%d\n", workerID, job.Nonce, job.RetryCount, maxReceiptRetries)
-				jobChan <- job
+
+				// Non-blocking send to prevent deadlock
+				select {
+				case jobChan <- job:
+					// Successfully re-queued
+				default:
+					// Channel full, mark as failed instead of hanging
+					logger.Error("  [Worker %d] Channel full, marking tx (nonce %d) as failed\n", workerID, job.Nonce)
+					database.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "retry queue full")
+				}
 			} else {
 				logger.Error("  [Worker %d] Tx (nonce %d) exceeded max retries (%d), marking failed\n", workerID, job.Nonce, maxReceiptRetries)
 				database.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "timeout after max retries")
@@ -159,7 +168,9 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, ws
 }
 
 func processReceiptJob(workerID int, txSender *tx.TransactionSender, job ReceiptJob, wsManager *WebSocketManager, database *db.Database) bool {
-	ctx := context.Background()
+	// Add timeout to prevent indefinite hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
 	var wsClient *ethclient.Client
 	if wsManager != nil {

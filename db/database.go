@@ -191,24 +191,6 @@ func (d *Database) InsertWallet(address, derivationPath string) error {
 	return nil
 }
 
-func (d *Database) CleanupOldRecords(retentionDays int) (int64, error) {
-	query := `
-		DELETE FROM transactions
-		WHERE submitted_at < datetime('now', ? || ' days')
-	`
-
-	res, err := d.db.Exec(query, fmt.Sprintf("-%d", retentionDays))
-	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup old records: %w", err)
-	}
-
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return rows, nil
-}
-
 func (d *Database) Close() error {
 	if d.db != nil {
 		return d.db.Close()

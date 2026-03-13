@@ -57,7 +57,6 @@ type Config struct {
 	LogLevel           string
 	AutomatedMode      bool // Skip user confirmation if true
 	ContextTimeout     int  // Timeout for RPC calls in seconds
-	DBRetentionDays    int  // Cleanup records older than this
 	WSReconnectDelay   int  // Seconds before reconnecting WebSocket
 	BufferSize         int  // Channel buffer size (0 = auto-calculate)
 	DBMaxOpenConns     int  // Max open SQLite connections
@@ -95,17 +94,6 @@ func main() {
 	}
 	defer db.Close()
 	logger.Info("✓ Database initialized\n")
-
-	// Cleanup old records if retention is configured
-	if config.DBRetentionDays > 0 {
-		logger.Info("Cleaning up records older than %d days...\n", config.DBRetentionDays)
-		deleted, err := db.CleanupOldRecords(config.DBRetentionDays)
-		if err != nil {
-			logger.Warn("Could not cleanup old records: %v\n", err)
-		} else if deleted > 0 {
-			logger.Info("✓ Cleaned up %d old records\n", deleted)
-		}
-	}
 
 	// Connect to RPC
 	logger.Info("Connecting to RPC: %s\n", config.RPCURL)
@@ -402,6 +390,9 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 		go func(idx int, w *wallet.Wallet) {
 			defer wgSubmit.Done()
 
+			logger.Info("[Wallet %d/%d] Starting goroutine for %s\n",
+				idx+1, len(wallets), w.Address.Hex())
+
 			logger.Debug("\n[Wallet %d/%d] (%s)\n",
 				idx+1, len(wallets), w.Address.Hex())
 
@@ -411,6 +402,7 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 			defer wCancel()
 
 			// Prepare batch transactions with precalculated nonces
+			logger.Debug("[Wallet %d/%d] Preparing batch transactions...\n", idx+1, len(wallets))
 			txRequests, err := txSender.PrepareBatchTransactions(
 				wCtx,
 				w,
@@ -420,9 +412,10 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 			)
 
 			if err != nil {
-				logger.Error("  Error preparing transactions: %v\n", err)
+				logger.Error("[Wallet %d/%d] Error preparing transactions: %v\n", idx+1, len(wallets), err)
 				return
 			}
+			logger.Debug("[Wallet %d/%d] Successfully prepared %d transactions\n", idx+1, len(wallets), len(txRequests))
 
 			// Sleep until next minute boundary if configured
 			if config.SleepMinutes > 0 {
@@ -473,6 +466,13 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 				if err != nil {
 					dbTx.Status = "failed"
 					dbTx.Error = err.Error()
+					nonce, err := txSender.GetNonce(wCtx, w.Address)
+
+					if err != nil {
+						logger.Error("  [W%d] Failed to get nonce for wallet %s: %v\n", idx+1, w.Address.Hex(), err)
+					} else {
+						wallets[walletIdx].Nonce = nonce
+					}
 
 					// Print failure reason
 					logger.Error("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
@@ -532,7 +532,6 @@ func LoadConfig() *Config {
 		LogLevel:           getEnv("LOG_LEVEL", DefaultLogLevel),
 		AutomatedMode:      getEnvBool("AUTOMATED_MODE", DefaultAutomatedMode),
 		ContextTimeout:     getEnvInt("CONTEXT_TIMEOUT", DefaultContextTimeout),
-		DBRetentionDays:    getEnvInt("DB_RETENTION_DAYS", DefaultDBRetentionDays),
 		WSReconnectDelay:   getEnvInt("WS_RECONNECT_DELAY", DefaultWSReconnectDelay),
 		BufferSize:         getEnvInt("BUFFER_SIZE", DefaultBufferSize),
 		DBMaxOpenConns:     getEnvInt("DB_MAX_OPEN_CONNS", DefaultDBMaxOpenConns),
