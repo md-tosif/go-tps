@@ -247,15 +247,11 @@ func main() {
 		logger.Debug("Expanding buffer size from %d to %d (WalletCount × TxPerWallet)\n", bufferSize, minBuf)
 		bufferSize = minBuf
 	}
-	receiptJobChan := make(chan worker.ReceiptJob, config.WalletCount*config.TxPerWallet)
 	dbWriteChan := make(chan worker.DBWriteJob, bufferSize)
 
 	dbWriteWG := sync.WaitGroup{}
 
-	// Start worker pools
-	worker.StartReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG, wsManager, db, txSender)
-	logger.Info("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
-	worker.StartDBWriterPool(config.ReceiptWorkers, dbWriteChan, receiptJobChan, db, &dbWriteWG)
+	worker.StartDBWriterPool(config.ReceiptWorkers, dbWriteChan, db, &dbWriteWG)
 	logger.Info("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
 
 	// Check if we should run in loop mode
@@ -289,6 +285,17 @@ func main() {
 	close(dbWriteChan)
 	dbWriteWG.Wait() // Wait for DB writers to finish
 	fmt.Println("✓ All database writes completed")
+
+	receiptJobChan := make(chan worker.ReceiptJob, bufferSize)
+
+	// Start worker pools
+	worker.StartReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG, wsManager, db, txSender)
+	logger.Info("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
+
+	// Queue pending transactions for receipt processing
+	if err := worker.QueuePendingTransactionsForReceipt(db, receiptJobChan); err != nil {
+		logger.Error("Error queuing pending transactions: %v\n", err)
+	}
 
 	close(receiptJobChan)
 	fmt.Println("Waiting for receipt confirmations to finish...")

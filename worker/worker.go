@@ -92,14 +92,14 @@ type DBWriteJob struct {
 	Tx *db.Transaction
 }
 
-func StartDBWriterPool(workerCount int, jobChan <-chan DBWriteJob, receiptJobChan chan ReceiptJob, database *db.Database, wg *sync.WaitGroup) {
+func StartDBWriterPool(workerCount int, jobChan <-chan DBWriteJob, database *db.Database, wg *sync.WaitGroup) {
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go dbWriterWorker(i+1, jobChan, receiptJobChan, database, wg)
+		go dbWriterWorker(i+1, jobChan, database, wg)
 	}
 }
 
-func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, receiptJobChan chan ReceiptJob, database *db.Database, wg *sync.WaitGroup) {
+func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, database *db.Database, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for job := range jobChan {
 		if _, err := database.InsertTransaction(job.Tx); err != nil {
@@ -114,12 +114,6 @@ func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, receiptJobChan chan
 			continue
 		}
 
-		receiptJobChan <- ReceiptJob{
-			TxHash:     job.Tx.TxHash,
-			Nonce:      job.Tx.Nonce,
-			RetryCount: 0,
-		}
-		logger.Debug("[DBWriter %d] Inserted tx (nonce %d) and dispatched receipt job\n", workerID, job.Tx.Nonce)
 	}
 }
 
@@ -218,4 +212,64 @@ func processReceiptJob(workerID int, txSender *tx.TransactionSender, job Receipt
 		logger.Warn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", workerID, job.Nonce)
 	}
 	return false
+}
+
+// QueuePendingTransactionsForReceipt fetches pending transactions in batches and queues them for receipt processing
+func QueuePendingTransactionsForReceipt(database *db.Database, receiptJobChan chan ReceiptJob) error {
+	fmt.Println("\nProcessing pending transactions for receipt confirmation...")
+
+	// Get total count of pending transactions
+	pendingCount, err := database.GetPendingTransactionCount()
+	if err != nil {
+		logger.Error("Error getting pending transaction count: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("Found %d pending transactions to process\n", pendingCount)
+
+	if pendingCount == 0 {
+		fmt.Println("No pending transactions found to process")
+		return nil
+	}
+
+	batchSize := 10000
+	totalBatches := (pendingCount + batchSize - 1) / batchSize // Ceiling division
+
+	fmt.Printf("Processing in %d batches of up to %d transactions each\n", totalBatches, batchSize)
+
+	for batchNum := 0; batchNum < totalBatches; batchNum++ {
+		offset := batchNum * batchSize
+		fmt.Printf("Processing batch %d/%d (offset: %d)...\n", batchNum+1, totalBatches, offset)
+
+		// Fetch batch of pending transactions
+		pendingTxs, err := database.GetPendingTransactionsBatch(batchSize, offset)
+		if err != nil {
+			logger.Error("Error fetching pending transactions batch %d: %v\n", batchNum+1, err)
+			continue
+		}
+
+		if len(pendingTxs) == 0 {
+			fmt.Printf("No pending transactions in batch %d, stopping\n", batchNum+1)
+			break
+		}
+
+		fmt.Printf("  Fetched %d transactions in batch %d\n", len(pendingTxs), batchNum+1)
+
+		// Create receipt jobs and push to channel
+		for _, tx := range pendingTxs {
+			receiptJob := ReceiptJob{
+				TxHash:     tx.TxHash,
+				Nonce:      tx.Nonce,
+				StartTime:  tx.SubmittedAt,
+				RetryCount: 0,
+			}
+			receiptJobChan <- receiptJob
+		}
+
+		fmt.Printf("  ✓ Queued %d receipt jobs from batch %d\n", len(pendingTxs), batchNum+1)
+
+	}
+
+	fmt.Printf("✓ All %d pending transactions queued for receipt processing\n", pendingCount)
+	return nil
 }

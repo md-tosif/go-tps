@@ -197,3 +197,52 @@ func (d *Database) Close() error {
 	}
 	return nil
 }
+
+// GetPendingTransactionsBatch fetches pending transactions in batches
+func (d *Database) GetPendingTransactionsBatch(limit, offset int) ([]*Transaction, error) {
+	query := `
+		SELECT id, batch_number, wallet_address, tx_hash, nonce, to_address, 
+		       value, gas_price, gas_limit, gas_used, effective_gas_price, 
+		       status, submitted_at, confirmed_at, execution_time, error
+		FROM transactions 
+		WHERE status = 'pending' AND tx_hash IS NOT NULL AND tx_hash != ''
+		ORDER BY submitted_at ASC
+		LIMIT ? OFFSET ?
+	`
+
+	rows, err := d.db.Query(query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending transactions: %w", err)
+	}
+	defer rows.Close()
+
+	var transactions []*Transaction
+	for rows.Next() {
+		tx := &Transaction{}
+		err := rows.Scan(
+			&tx.ID, &tx.BatchNumber, &tx.WalletAddress, &tx.TxHash, &tx.Nonce,
+			&tx.ToAddress, &tx.Value, &tx.GasPrice, &tx.GasLimit, &tx.GasUsed,
+			&tx.EffectiveGasPrice, &tx.Status, &tx.SubmittedAt, &tx.ConfirmedAt,
+			&tx.ExecutionTime, &tx.Error,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan transaction: %w", err)
+		}
+		transactions = append(transactions, tx)
+	}
+
+	return transactions, nil
+}
+
+// GetPendingTransactionCount returns the total count of pending transactions
+func (d *Database) GetPendingTransactionCount() (int, error) {
+	query := `SELECT COUNT(*) FROM transactions WHERE status = 'pending' AND tx_hash IS NOT NULL AND tx_hash != ''`
+
+	var count int
+	err := d.db.QueryRow(query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count pending transactions: %w", err)
+	}
+
+	return count, nil
+}
