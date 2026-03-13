@@ -507,15 +507,19 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 				if err != nil {
 					dbTx.Status = "failed"
 					dbTx.Error = err.Error()
-					nonce, err := txSender.GetNonce(wCtx, w.Address)
+					
+					// Check for specific error before reassigning err variable
+					isUnderpriced := err.Error() == "replacement transaction underpriced"
+					
+					nonce, getNonceErr := txSender.GetNonce(wCtx, w.Address)
 
-					if err.Error() == "replacement transaction underpriced" {
+					if isUnderpriced {
 						logger.Warn("  [W%d] Nonce too low for wallet %s, likely due to pending transactions. Current nonce: %d\n", idx+1, w.Address.Hex(), nonce)
 						underPricedError = true
 					}
 
-					if err != nil {
-						logger.Error("  [W%d] Failed to get nonce for wallet %s: %v\n", idx+1, w.Address.Hex(), err)
+					if getNonceErr != nil {
+						logger.Error("  [W%d] Failed to get nonce for wallet %s: %v\n", idx+1, w.Address.Hex(), getNonceErr)
 					} else {
 						wallets[walletIdx].Nonce = nonce
 					}
