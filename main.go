@@ -29,13 +29,15 @@ const (
 	DefaultValueWei           = "1000000000000000" // 0.001 ETH
 	DefaultToAddress          = "0x0000000000000000000000000000000000000001"
 	DefaultRunDurationMinutes = 0       // 0 = run once, >0 = loop for duration
-	DefaultReceiptWorkers     = 4       // Tuned for small machines; override with RECEIPT_WORKERS
+	DefaultDBWorkers          = 4       // DB writer workers
+	DefaultReceiptWorkers     = 4       // Receipt confirmation workers
 	DefaultLogLevel           = "DEBUG" // DEBUG, INFO, WARN, ERROR
 	DefaultAutomatedMode      = false   // true = skip user confirmation
 	DefaultContextTimeout     = 30      // seconds for RPC calls
 	DefaultDBRetentionDays    = 30      // cleanup records older than this
 	DefaultWSReconnectDelay   = 5       // seconds before reconnecting WebSocket
-	DefaultBufferSize         = 500     // channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
+	DefaultDBBufferSize       = 500     // DB channel buffer size (0 = auto-calculate from WalletCount * TxPerWallet)
+	DefaultReceiptBufferSize  = 1000    // Receipt channel buffer size (0 = auto-calculate)
 	DefaultDBMaxOpenConns     = 15      // max open DB connections
 	DefaultDBMaxIdleConns     = 5       // max idle DB connections
 	DefaultSleepMinutes       = 0       // minutes to sleep before submitting transactions
@@ -53,12 +55,14 @@ type Config struct {
 	ValueWei           string
 	ToAddress          string
 	RunDurationMinutes int
-	ReceiptWorkers     int
+	DBWorkers          int // Number of DB writer workers
+	ReceiptWorkers     int // Number of receipt confirmation workers
 	LogLevel           string
 	AutomatedMode      bool // Skip user confirmation if true
 	ContextTimeout     int  // Timeout for RPC calls in seconds
 	WSReconnectDelay   int  // Seconds before reconnecting WebSocket
-	BufferSize         int  // Channel buffer size (0 = auto-calculate)
+	DBBufferSize       int  // DB channel buffer size (0 = auto-calculate)
+	ReceiptBufferSize  int  // Receipt channel buffer size (0 = auto-calculate)
 	DBMaxOpenConns     int  // Max open SQLite connections
 	DBMaxIdleConns     int  // Max idle SQLite connections
 	SleepMinutes       int  // Minutes to sleep before submitting transactions
@@ -232,27 +236,37 @@ func main() {
 	var receiptWG sync.WaitGroup // WaitGroup for receipt confirmations
 
 	// Create worker pools ONCE (reused across all iterations in loop mode)
-	// Calculate buffer size for channels
-	bufferSize := config.BufferSize
-	if bufferSize == 0 {
+	// Calculate DB buffer size
+	dbBufferSize := config.DBBufferSize
+	if dbBufferSize == 0 {
 		// Auto-calculate from wallet and transaction counts
-		bufferSize = config.WalletCount * config.TxPerWallet
-		logger.Debug("Auto-calculated buffer size: %d (WalletCount %d × TxPerWallet %d)\n", bufferSize, config.WalletCount, config.TxPerWallet)
+		dbBufferSize = config.WalletCount * config.TxPerWallet
+		logger.Debug("Auto-calculated DB buffer size: %d (WalletCount %d × TxPerWallet %d)\n", dbBufferSize, config.WalletCount, config.TxPerWallet)
 	} else {
-		logger.Debug("Using configured buffer size: %d\n", bufferSize)
+		logger.Debug("Using configured DB buffer size: %d\n", dbBufferSize)
 	}
 	// Always ensure the buffer is at least large enough for all transactions so
 	// wallet goroutines never block on a full channel while DB writers are slow.
-	if minBuf := config.WalletCount * config.TxPerWallet; bufferSize < minBuf {
-		logger.Debug("Expanding buffer size from %d to %d (WalletCount × TxPerWallet)\n", bufferSize, minBuf)
-		bufferSize = minBuf
+	if minBuf := config.WalletCount * config.TxPerWallet; dbBufferSize < minBuf {
+		logger.Debug("Expanding DB buffer size from %d to %d (WalletCount × TxPerWallet)\n", dbBufferSize, minBuf)
+		dbBufferSize = minBuf
 	}
-	dbWriteChan := make(chan worker.DBWriteJob, bufferSize)
+	dbWriteChan := make(chan worker.DBWriteJob, dbBufferSize)
+
+	// Calculate Receipt buffer size
+	receiptBufferSize := config.ReceiptBufferSize
+	if receiptBufferSize == 0 {
+		// Auto-calculate - typically needs to handle pending transactions from DB
+		receiptBufferSize = 10000 // Default for batched processing
+		logger.Debug("Auto-calculated receipt buffer size: %d\n", receiptBufferSize)
+	} else {
+		logger.Debug("Using configured receipt buffer size: %d\n", receiptBufferSize)
+	}
 
 	dbWriteWG := sync.WaitGroup{}
 
-	worker.StartDBWriterPool(config.ReceiptWorkers, dbWriteChan, db, &dbWriteWG)
-	logger.Info("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
+	worker.StartDBWriterPool(config.DBWorkers, dbWriteChan, db, &dbWriteWG)
+	logger.Info("📋 Started %d DB writer workers\n\n", config.DBWorkers)
 
 	// Check if we should run in loop mode
 	if config.RunDurationMinutes > 0 {
@@ -286,7 +300,7 @@ func main() {
 	dbWriteWG.Wait() // Wait for DB writers to finish
 	fmt.Println("✓ All database writes completed")
 
-	receiptJobChan := make(chan worker.ReceiptJob, bufferSize)
+	receiptJobChan := make(chan worker.ReceiptJob, receiptBufferSize)
 
 	// Start worker pools
 	worker.StartReceiptWorkerPool(config.ReceiptWorkers, receiptJobChan, &receiptWG, wsManager, db, txSender)
@@ -391,6 +405,25 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 	fmt.Println("Starting transaction submission...")
 	fmt.Println(strings.Repeat("=", 60))
 
+	ctx, wCancel := context.WithTimeout(context.Background(), time.Duration(config.ContextTimeout)*time.Second)
+	defer wCancel()
+
+	gasPrice, err := txSender.GetGasPrice(ctx)
+	if err != nil {
+		// 1 gwei default if RPC call fails
+		gasPrice = big.NewInt(1e9)
+		logger.Error("Error fetching gas price, defaulting to 1 gwei: %v\n", err)
+	}
+
+	// if underpricedError true increase gas price by 10% and retry submission (up to 3 retries)
+	underPricedError := false
+	if underPricedError {
+		gasPrice = new(big.Int).Mul(gasPrice, big.NewInt(110))
+		gasPrice = new(big.Int).Div(gasPrice, big.NewInt(100))
+		logger.Warn("Gas price increased by 10%% to %s wei due to underpriced error\n", gasPrice.String())
+		underPricedError = false // reset for next transactions
+	}
+
 	// Process all wallets in parallel
 	for walletIdx, w := range wallets {
 		wgSubmit.Add(1)
@@ -416,6 +449,7 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 				toAddress,
 				value,
 				config.TxPerWallet,
+				gasPrice,
 			)
 
 			if err != nil {
@@ -474,6 +508,11 @@ func runSingleExecution(config *Config, txSender *txpkg.TransactionSender, walle
 					dbTx.Status = "failed"
 					dbTx.Error = err.Error()
 					nonce, err := txSender.GetNonce(wCtx, w.Address)
+
+					if err.Error() == "replacement transaction underpriced" {
+						logger.Warn("  [W%d] Nonce too low for wallet %s, likely due to pending transactions. Current nonce: %d\n", idx+1, w.Address.Hex(), nonce)
+						underPricedError = true
+					}
 
 					if err != nil {
 						logger.Error("  [W%d] Failed to get nonce for wallet %s: %v\n", idx+1, w.Address.Hex(), err)
@@ -535,12 +574,14 @@ func LoadConfig() *Config {
 		ValueWei:           getEnv("VALUE_WEI", DefaultValueWei),
 		ToAddress:          getEnv("TO_ADDRESS", DefaultToAddress),
 		RunDurationMinutes: getEnvInt("RUN_DURATION_MINUTES", DefaultRunDurationMinutes),
+		DBWorkers:          getEnvInt("DB_WORKERS", DefaultDBWorkers),
 		ReceiptWorkers:     getEnvInt("RECEIPT_WORKERS", DefaultReceiptWorkers),
 		LogLevel:           getEnv("LOG_LEVEL", DefaultLogLevel),
 		AutomatedMode:      getEnvBool("AUTOMATED_MODE", DefaultAutomatedMode),
 		ContextTimeout:     getEnvInt("CONTEXT_TIMEOUT", DefaultContextTimeout),
 		WSReconnectDelay:   getEnvInt("WS_RECONNECT_DELAY", DefaultWSReconnectDelay),
-		BufferSize:         getEnvInt("BUFFER_SIZE", DefaultBufferSize),
+		DBBufferSize:       getEnvInt("DB_BUFFER_SIZE", DefaultDBBufferSize),
+		ReceiptBufferSize:  getEnvInt("RECEIPT_BUFFER_SIZE", DefaultReceiptBufferSize),
 		DBMaxOpenConns:     getEnvInt("DB_MAX_OPEN_CONNS", DefaultDBMaxOpenConns),
 		DBMaxIdleConns:     getEnvInt("DB_MAX_IDLE_CONNS", DefaultDBMaxIdleConns),
 		SleepMinutes:       getEnvInt("SLEEP_MINUTES", DefaultSleepMinutes),
