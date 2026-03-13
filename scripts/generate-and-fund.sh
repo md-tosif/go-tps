@@ -24,11 +24,15 @@ do
 
   echo "Funding wallet[$i] -> $ADDR"
 
-  cast send \
-    --rpc-url $RPC_URL \
-    --private-key $FUNDER_PK \
-    --value $AMOUNT \
-    $ADDR
+  if TX_HASH=$(cast send --private-key "$FUNDER_PK" \
+                        --rpc-url "$RPC_URL" \
+                        --value "$AMOUNT" \
+                        "$ADDR" \
+                        2>&1); then
+    echo "    ✅ Success! TX: $(echo "$TX_HASH" | grep -oP '0x[a-fA-F0-9]{64}' | head -1)"
+  else
+    echo "    ❌ Failed: $TX_HASH"
+  fi
 
   sleep 1
 done
