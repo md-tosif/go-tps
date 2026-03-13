@@ -255,7 +255,7 @@ func (d *Database) GetPendingTransactionsBatchCursor(lastID int64, limit int) ([
 		       value, gas_price, gas_limit, gas_used, effective_gas_price, 
 		       status, submitted_at, confirmed_at, execution_time, error
 		FROM transactions 
-		WHERE status = 'pending' AND tx_hash IS NOT NULL AND tx_hash != ''
+		WHERE status IN ('pending', 'failed') AND tx_hash IS NOT NULL AND tx_hash != ''
 		AND id > ?
 		ORDER BY id ASC
 		LIMIT ?
