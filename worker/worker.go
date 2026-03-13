@@ -137,15 +137,8 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, ws
 				job.RetryCount++
 				logger.Warn("  [Worker %d] Re-queuing tx (nonce %d) for retry %d/%d\n", workerID, job.Nonce, job.RetryCount, maxReceiptRetries)
 
-				// Non-blocking send to prevent deadlock
-				select {
-				case jobChan <- job:
-					// Successfully re-queued
-				default:
-					// Channel full, mark as failed instead of hanging
-					logger.Error("  [Worker %d] Channel full, marking tx (nonce %d) as failed\n", workerID, job.Nonce)
-					database.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "retry queue full")
-				}
+				// Block until we can re-queue - no new transactions being added during receipt processing
+				jobChan <- job
 			} else {
 				logger.Error("  [Worker %d] Tx (nonce %d) exceeded max retries (%d), marking failed\n", workerID, job.Nonce, maxReceiptRetries)
 				database.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "timeout after max retries")
