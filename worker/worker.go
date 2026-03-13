@@ -169,7 +169,11 @@ func processReceiptJob(workerID int, txSender *tx.TransactionSender, job Receipt
 		wsClient = wsManager.GetClient()
 	}
 
-	receipt, receiptErr := txSender.WaitForReceiptWithSharedWebSocket(ctx, wsClient, common.HexToHash(job.TxHash), 60*time.Second)
+	receipt, receiptErr := txSender.GetTransactionReceipt(ctx, common.HexToHash(job.TxHash))
+
+	if receipt == nil && wsClient != nil {
+		receipt, receiptErr = txSender.WaitForReceiptWithSharedWebSocket(ctx, wsClient, common.HexToHash(job.TxHash), 60*time.Second)
+	}
 
 	if receiptErr != nil {
 		if strings.Contains(receiptErr.Error(), "timeout waiting for transaction receipt") {

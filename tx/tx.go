@@ -179,6 +179,15 @@ func (ts *TransactionSender) WaitForReceipt(ctx context.Context, txHash common.H
 	}
 }
 
+// GetTransactionReceipt gets the receipt for a transaction hash
+func (ts *TransactionSender) GetTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
+	receipt, err := ts.client.TransactionReceipt(ctx, txHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction receipt: %w", err)
+	}
+	return receipt, nil
+}
+
 func (ts *TransactionSender) WaitForReceiptWithSharedWebSocket(ctx context.Context, wsClient *ethclient.Client, txHash common.Hash, timeout time.Duration) (*types.Receipt, error) {
 	if wsClient == nil {
 		return ts.WaitForReceipt(ctx, txHash, timeout)
