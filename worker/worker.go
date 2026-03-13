@@ -137,6 +137,11 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, ws
 				job.RetryCount++
 				logger.Warn("  [Worker %d] Re-queuing tx (nonce %d) for retry %d/%d\n", workerID, job.Nonce, job.RetryCount, maxReceiptRetries)
 
+				// Add exponential backoff delay before retry to avoid overwhelming the network
+				retryDelay := time.Duration(job.RetryCount*job.RetryCount) * 30 * time.Second // 30s, 120s, 270s
+				logger.Debug("  [Worker %d] Waiting %v before retry for tx (nonce %d)\n", workerID, retryDelay, job.Nonce)
+				time.Sleep(retryDelay)
+
 				// Block until we can re-queue - no new transactions being added during receipt processing
 				jobChan <- job
 			} else {
