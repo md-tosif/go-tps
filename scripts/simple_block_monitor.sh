@@ -48,7 +48,7 @@ while true; do
                 color="$YELLOW"
             elif [ "$tx_count" -lt 10 ]; then
                 color="$GREEN"  
-            elif [ "$tx_count" -lt 50 ]; then
+            elif [ "$tx_count" -lt 290 ]; then
                 color="$BLUE"
             else
                 color="$RED"
