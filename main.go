@@ -158,10 +158,14 @@ func main() {
 
 	logger.Info("✓ Generated %d wallets\n", len(wallets))
 
+	// Create context with timeout for database and RPC operations
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer setupCancel()
+
 	// Save wallets to database
 	logger.Info("\nSaving wallets to database...\n")
 	for _, w := range wallets {
-		err := db.InsertWallet(w.Address.Hex(), w.DerivationPath)
+		err := db.InsertWallet(setupCtx, w.Address.Hex(), w.DerivationPath)
 		if err != nil {
 			logger.Warn("Could not save wallet %s: %v\n", w.Address.Hex(), err)
 		}
@@ -177,7 +181,7 @@ func main() {
 
 	for i, w := range wallets {
 
-		wallets[i].Nonce, err = txSender.GetNonce(context.Background(), w.Address)
+		wallets[i].Nonce, err = txSender.GetNonce(setupCtx, w.Address)
 
 		if err != nil {
 			logger.Debug("[%d] %s\n", i+1, w.Address.Hex())
@@ -186,7 +190,7 @@ func main() {
 			continue
 		}
 
-		balance, err := txSender.GetBalance(context.Background(), w.Address)
+		balance, err := txSender.GetBalance(setupCtx, w.Address)
 		if err != nil {
 			logger.Debug("[%d] %s\n", i+1, w.Address.Hex())
 			logger.Error("Error fetching balance: %v\n", err)
@@ -196,27 +200,21 @@ func main() {
 
 		balanceFloat := new(big.Float).SetInt(balance)
 		// Convert balance to ETH for display
-		logger.Info("✓ Connected to RPC\n")
 		ethValue := new(big.Float).Quo(balanceFloat, big.NewFloat(1e18))
 
 		fmt.Printf("[%d] %s\n", i+1, w.Address.Hex())
 		fmt.Printf("    Balance: %s wei (%.6f ETH)\n", balance.String(), ethValue)
-		logger.Info("Connecting to WebSocket: %s\n", config.WSURL)
 		// Check if balance is zero
 		if balance.Cmp(big.NewInt(0)) == 0 {
 			logger.Warn("    ⚠️  WARNING: Wallet has ZERO balance!\n")
-			logger.Warn("Could not connect to WebSocket (will use RPC polling): %v\n", err)
 		}
-		logger.Info("✓ Connected to WebSocket\n")
 	}
 
-	logger.Debug("No WebSocket URL provided, will use RPC polling for receipts\n")
 	if !allFunded {
 		fmt.Println("⚠️  WARNING: Some wallets have zero balance or errors!")
 	}
 	fmt.Println()
 
-	logger.Info("\nUsing provided mnemonic...\n")
 	if !config.AutomatedMode {
 		fmt.Print("Do you want to proceed with sending transactions? (y/n): ")
 		scanner := bufio.NewScanner(os.Stdin)
@@ -349,9 +347,7 @@ func runInLoopMode(config *Config, wallets []*wallet.Wallet, dbWriteChan chan wo
 			logger.Error("Error connecting to RPC: %v\n", err)
 			os.Exit(1)
 		}
-		logger.Info("📋 Started %d receipt confirmation workers\n", config.ReceiptWorkers)
 		runSingleExecution(config, txSender, wallets, dbWriteChan, dbWriteWG)
-		logger.Info("📋 Started %d DB writer workers\n\n", config.ReceiptWorkers)
 		txSender.Close()
 		// Calculate elapsed time and ensure minimum 1 second per iteration
 		iterationElapsed := time.Since(iterationStart)

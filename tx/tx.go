@@ -44,7 +44,11 @@ func NewTransactionSender(rpcURL string) (*TransactionSender, error) {
 		return nil, fmt.Errorf("failed to connect to RPC: %w", err)
 	}
 
-	chainID, err := client.ChainID(context.Background())
+	// Use a reasonable timeout for chain ID retrieval
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	chainID, err := client.ChainID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chain ID: %w", err)
 	}

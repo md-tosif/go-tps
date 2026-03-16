@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -119,7 +120,7 @@ func optimizeDatabase(db *sql.DB) error {
 	return nil
 }
 
-func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
+func (d *Database) InsertTransaction(ctx context.Context, tx *Transaction) (int64, error) {
 	query := `
 		INSERT INTO transactions (
 			batch_number, wallet_address, tx_hash, nonce, to_address, value,
@@ -130,7 +131,7 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 
 	logger.Debug("[DB] INSERT tx_hash=%s status=%s nonce=%d wallet=%s\n", tx.TxHash, tx.Status, tx.Nonce, tx.WalletAddress)
 
-	result, err := d.db.Exec(query,
+	result, err := d.db.ExecContext(ctx, query,
 		tx.BatchNumber,
 		tx.WalletAddress,
 		tx.TxHash,
@@ -158,7 +159,7 @@ func (d *Database) InsertTransaction(tx *Transaction) (int64, error) {
 	return id, err
 }
 
-func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *time.Time, gasUsed uint64, effectiveGasPrice string, errMsg string) error {
+func (d *Database) UpdateTransactionStatus(ctx context.Context, txHash, status string, confirmedAt *time.Time, gasUsed uint64, effectiveGasPrice string, errMsg string) error {
 	logger.Debug("[DB] UPDATE tx_hash=%s status=%s gas_used=%d err=%q\n", txHash, status, gasUsed, errMsg)
 
 	query := `
@@ -167,7 +168,7 @@ func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *t
 		WHERE tx_hash = ?
 	`
 
-	_, err := d.db.Exec(query, status, confirmedAt, gasUsed, effectiveGasPrice, errMsg, txHash)
+	_, err := d.db.ExecContext(ctx, query, status, confirmedAt, gasUsed, effectiveGasPrice, errMsg, txHash)
 	if err != nil {
 		logger.Error("[DB] UPDATE FAILED tx_hash=%s error=%v\n", txHash, err)
 		return fmt.Errorf("failed to update transaction: %w", err)
@@ -177,13 +178,13 @@ func (d *Database) UpdateTransactionStatus(txHash, status string, confirmedAt *t
 	return nil
 }
 
-func (d *Database) InsertWallet(address, derivationPath string) error {
+func (d *Database) InsertWallet(ctx context.Context, address, derivationPath string) error {
 	query := `
 		INSERT INTO wallets (address, derivation_path, created_at)
 		VALUES (?, ?, ?)
 	`
 
-	_, err := d.db.Exec(query, address, derivationPath, time.Now())
+	_, err := d.db.ExecContext(ctx, query, address, derivationPath, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to insert wallet: %w", err)
 	}
@@ -235,11 +236,11 @@ func (d *Database) GetPendingTransactionsBatch(limit, offset int) ([]*Transactio
 }
 
 // GetPendingTransactionCount returns the total count of pending transactions
-func (d *Database) GetPendingTransactionCount() (int, error) {
+func (d *Database) GetPendingTransactionCount(ctx context.Context) (int, error) {
 	query := `SELECT COUNT(*) FROM transactions WHERE status = 'pending' AND tx_hash IS NOT NULL AND tx_hash != ''`
 
 	var count int
-	err := d.db.QueryRow(query).Scan(&count)
+	err := d.db.QueryRowContext(ctx, query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count pending transactions: %w", err)
 	}
@@ -249,7 +250,7 @@ func (d *Database) GetPendingTransactionCount() (int, error) {
 
 // GetPendingTransactionsBatchCursor fetches pending transactions using cursor-based pagination
 // This is more efficient than OFFSET/LIMIT for large datasets and avoids missing records
-func (d *Database) GetPendingTransactionsBatchCursor(lastID int64, limit int) ([]*Transaction, error) {
+func (d *Database) GetPendingTransactionsBatchCursor(ctx context.Context, lastID int64, limit int) ([]*Transaction, error) {
 	query := `
 		SELECT id, batch_number, wallet_address, tx_hash, nonce, to_address, 
 		       value, gas_price, gas_limit, gas_used, effective_gas_price, 
@@ -261,7 +262,7 @@ func (d *Database) GetPendingTransactionsBatchCursor(lastID int64, limit int) ([
 		LIMIT ?
 	`
 
-	rows, err := d.db.Query(query, lastID, limit)
+	rows, err := d.db.QueryContext(ctx, query, lastID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending transactions: %w", err)
 	}

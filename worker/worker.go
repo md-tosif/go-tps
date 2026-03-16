@@ -102,10 +102,13 @@ func StartDBWriterPool(workerCount int, jobChan <-chan DBWriteJob, database *db.
 func dbWriterWorker(workerID int, jobChan <-chan DBWriteJob, database *db.Database, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for job := range jobChan {
-		if _, err := database.InsertTransaction(job.Tx); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if _, err := database.InsertTransaction(ctx, job.Tx); err != nil {
 			logger.Warn("[DBWriter %d] Could not save transaction to DB: %v\n", workerID, err)
+			cancel()
 			continue
 		}
+		cancel()
 
 		// Only dispatch a receipt job for transactions that were actually
 		// submitted (have a hash). Failed submissions have no on-chain receipt.
@@ -146,7 +149,9 @@ func receiptWorker(workerID int, jobChan chan ReceiptJob, wg *sync.WaitGroup, ws
 				jobChan <- job
 			} else {
 				logger.Error("  [Worker %d] Tx (nonce %d) exceeded max retries (%d), marking failed\n", workerID, job.Nonce, maxReceiptRetries)
-				database.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", "timeout after max retries")
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				database.UpdateTransactionStatus(ctx, job.TxHash, "failed", nil, 0, "", "timeout after max retries")
+				cancel()
 			}
 		} else {
 			jobsProcessed++
@@ -180,7 +185,9 @@ func processReceiptJob(workerID int, txSender *tx.TransactionSender, job Receipt
 			logger.Warn("  [W%d] Tx (nonce %d): ⏱ timed out (retry %d/%d)\n", workerID, job.Nonce, job.RetryCount+1, maxReceiptRetries)
 			return true
 		}
-		database.UpdateTransactionStatus(job.TxHash, "failed", nil, 0, "", receiptErr.Error())
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		database.UpdateTransactionStatus(ctx, job.TxHash, "failed", nil, 0, "", receiptErr.Error())
+		cancel()
 		logger.Warn("  [W%d] Tx (nonce %d): ✗ error - %v\n", workerID, job.Nonce, receiptErr)
 		return false
 	}
@@ -206,11 +213,12 @@ func processReceiptJob(workerID int, txSender *tx.TransactionSender, job Receipt
 	}
 
 	confirmationTime := confirmedAt.Sub(job.StartTime).Seconds()
+
 	if receipt.Status == 1 {
-		database.UpdateTransactionStatus(job.TxHash, "success", &confirmedAt, gasUsed, effectiveGasPrice, "")
+		database.UpdateTransactionStatus(ctx, job.TxHash, "success", &confirmedAt, gasUsed, effectiveGasPrice, "")
 		logger.Info("  [W%d] Tx (nonce %d): ✓ confirmed in %.2fs (gas: %d)\n", workerID, job.Nonce, confirmationTime, gasUsed)
 	} else {
-		database.UpdateTransactionStatus(job.TxHash, "failed", &confirmedAt, gasUsed, effectiveGasPrice, "transaction reverted")
+		database.UpdateTransactionStatus(ctx, job.TxHash, "failed", &confirmedAt, gasUsed, effectiveGasPrice, "transaction reverted")
 		logger.Warn("  [W%d] Tx (nonce %d): ✗ reverted (transaction failed on-chain)\n", workerID, job.Nonce)
 	}
 	return false
@@ -227,7 +235,9 @@ func QueuePendingTransactionsForReceipt(database *db.Database, receiptJobChan ch
 
 	for {
 		// Get the next batch of pending transactions using cursor-based pagination
-		transactions, err := database.GetPendingTransactionsBatchCursor(lastTxnID, batchSize)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		transactions, err := database.GetPendingTransactionsBatchCursor(ctx, lastTxnID, batchSize)
+		cancel()
 		if err != nil {
 			return fmt.Errorf("failed to fetch pending transactions: %w", err)
 		}
