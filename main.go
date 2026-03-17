@@ -441,6 +441,15 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 			}
 			adjustedGasPrice := getAdjustedGasPrice(baseGasPrice)
 
+			// Enforce minimum gas price from config
+			minGasPrice := new(big.Int)
+			minGasPrice.SetString(config.MinGasPrice, 10)
+			if adjustedGasPrice.Cmp(minGasPrice) < 0 {
+				logger.Debug("[Wallet %d/%d] Gas price %s wei below minimum %s wei, using minimum\n",
+					idx+1, len(wallets), adjustedGasPrice.String(), minGasPrice.String())
+				adjustedGasPrice = minGasPrice
+			}
+
 			if adjustedGasPrice.Cmp(baseGasPrice) != 0 {
 				logger.Debug("[Wallet %d/%d] Using adjusted gas price: %s wei (base: %s wei)\n",
 					idx+1, len(wallets), adjustedGasPrice.String(), baseGasPrice.String())
@@ -453,6 +462,7 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 				value,
 				config.TxPerWallet,
 				adjustedGasPrice,
+				config.GasLimit,
 			)
 
 			if err != nil {
