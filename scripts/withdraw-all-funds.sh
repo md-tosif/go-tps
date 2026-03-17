@@ -75,9 +75,9 @@ do
   echo "  Address: $WALLET_ADDR"
   echo "  Balance: $BALANCE wei ($(cast to-unit $BALANCE ether) ETH)"
   
-  # Check if wallet has enough funds to cover gas
-  if [ "$BALANCE" -le "$GAS_COST" ]; then
-    if [ "$BALANCE" -eq "0" ]; then
+  # Check if wallet has enough funds to cover gas (use bc for large number comparison)
+  if [ "$(echo "$BALANCE <= $GAS_COST" | bc)" -eq "1" ]; then
+    if [ "$(echo "$BALANCE == 0" | bc)" -eq "1" ]; then
       echo "  ⭕ Empty wallet, skipping"
       ((EMPTY_WALLETS++))
     else
