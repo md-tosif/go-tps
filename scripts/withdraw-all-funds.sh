@@ -75,29 +75,36 @@ do
   echo "  Address: $WALLET_ADDR"
   echo "  Balance: $BALANCE wei ($(cast to-unit $BALANCE ether) ETH)"
   
-  # Get fresh gas price for this transaction (gas price can change quickly)
-  CURRENT_GAS_PRICE=$(cast gas-price --rpc-url "$RPC_URL" 2>/dev/null)
-  if [ -z "$CURRENT_GAS_PRICE" ]; then
-    CURRENT_GAS_PRICE="$GAS_PRICE"  # Fallback to original price
+  # Use cast to estimate actual gas cost (more accurate than manual calculation)
+  echo "  Estimating gas cost..."
+  ESTIMATED_GAS_COST=$(cast estimate --from "$WALLET_ADDR" --to "$DESTINATION" --value "1" --rpc-url "$RPC_URL" 2>/dev/null)
+  
+  if [ -n "$ESTIMATED_GAS_COST" ]; then
+    # Get current gas price and calculate total cost
+    CURRENT_GAS_PRICE=$(cast gas-price --rpc-url "$RPC_URL" 2>/dev/null || echo "$GAS_PRICE")
+    TOTAL_GAS_COST=$(echo "$CURRENT_GAS_PRICE * $ESTIMATED_GAS_COST" | bc | cut -d. -f1)
+    # Add 50% safety buffer for EIP-1559 and gas fluctuations  
+    SAFE_GAS_COST=$(echo "$TOTAL_GAS_COST * 1.5" | bc | cut -d. -f1)
+  else
+    echo "  ⚠️  Could not estimate gas, using conservative fixed amount"
+    # Use fixed 0.01 ETH (10^16 wei) for gas - very conservative
+    SAFE_GAS_COST="10000000000000000"
   fi
   
-  # Add 20% safety buffer to gas cost to handle price fluctuations
-  BUFFERED_GAS_COST=$(echo "$CURRENT_GAS_PRICE * $GAS_LIMIT * 1.2" | bc | cut -d. -f1)
-  
-  # Check if wallet has enough funds to cover gas (use bc for large number comparison)
-  if [ "$(echo "$BALANCE <= $BUFFERED_GAS_COST" | bc)" -eq "1" ]; then
+  # Check if wallet has enough funds to cover gas
+  if [ "$(echo "$BALANCE <= $SAFE_GAS_COST" | bc)" -eq "1" ]; then
     if [ "$(echo "$BALANCE == 0" | bc)" -eq "1" ]; then
       echo "  ⭕ Empty wallet, skipping"
       ((EMPTY_WALLETS++))
     else
-      echo "  ⚠️  Balance too low to cover gas costs (with buffer), skipping" 
+      echo "  ⚠️  Balance too low to cover gas costs, skipping (needs $(cast to-unit $SAFE_GAS_COST ether) ETH for gas)"
       ((FAILED_WITHDRAWALS++))
     fi
     continue
   fi
   
-  # Calculate amount to send (balance minus buffered gas cost)
-  SEND_AMOUNT=$(echo "$BALANCE - $BUFFERED_GAS_COST" | bc | cut -d. -f1)
+  # Calculate amount to send (balance minus safe gas cost)
+  SEND_AMOUNT=$(echo "$BALANCE - $SAFE_GAS_COST" | bc | cut -d. -f1)
   echo "  Withdrawing: $SEND_AMOUNT wei ($(cast to-unit $SEND_AMOUNT ether) ETH)"
   
   # Get private key for this wallet
