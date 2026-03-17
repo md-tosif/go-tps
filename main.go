@@ -357,6 +357,13 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 		adjustedFloat := new(big.Float).Mul(basePriceFloat, multiplierBig)
 
 		adjustedPrice, _ := adjustedFloat.Int(nil)
+
+		// if adjusted price is lower than 2 gwei then assign 2 gwei to avoid underpriced errors
+		minGasPrice := big.NewInt(2000000000) // 2 gwei
+		if adjustedPrice.Cmp(minGasPrice) < 0 {
+			return minGasPrice
+		}
+
 		return adjustedPrice
 	}
 
