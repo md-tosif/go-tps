@@ -21,8 +21,8 @@ echo "Press Ctrl+C to stop"
 echo "--------------------------------"
 
 # Check if required tools are available
-if ! command -v cast &> /dev/null; then
-    echo -e "${RED}ERROR: cast not found. Install Foundry first.${NC}"
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}ERROR: curl not found. Please install curl.${NC}"
     exit 1
 fi
 
@@ -36,33 +36,57 @@ if ! command -v bc &> /dev/null; then
     exit 1
 fi
 
+# Helper function to get latest block number
+get_block_number() {
+    curl -s -X POST -H "Content-Type: application/json" \
+        --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+        "$RPC_URL" | jq -r '.result // "0x0"' 2>/dev/null | xargs -I {} printf "%d" {} 2>/dev/null || echo "0"
+}
+
+# Helper function to get transaction count for a block
+get_tx_count() {
+    local block_hex="$1"
+    curl -s -X POST -H "Content-Type: application/json" \
+        --data '{"jsonrpc":"2.0","method":"eth_getBlockTransactionCountByNumber","params":["'$block_hex'"],"id":1}' \
+        "$RPC_URL" | jq -r '.result // "0x0"' 2>/dev/null | xargs -I {} printf "%d" {} 2>/dev/null || echo "0"
+}
+
 # Get starting block number
-last_block=$(cast block-number --rpc-url "$RPC_URL")
+last_block=$(get_block_number)
 echo "Starting from block #$last_block"
 echo ""
 
 while true; do
-    current_block=$(cast block-number --rpc-url "$RPC_URL" 2>/dev/null || echo "$last_block")
+    current_block=$(get_block_number)
     
     # Check if we have a new block
     if [ "$current_block" -gt "$last_block" ]; then
         # Process all new blocks
         for ((block=$((last_block+1)); block<=current_block; block++)); do
             timestamp=$(date '+%H:%M:%S')
+            block_hex="0x$(printf '%x' $block)"
             
             # Get transaction count for this block
-            tx_count=$(cast rpc eth_getBlockTransactionCountByNumber "0x$(printf '%x' $block)" --rpc-url "$RPC_URL" 2>/dev/null | sed 's/^0x//' | xargs printf '%d\n' 2>/dev/null || echo "0")
+            tx_count=$(get_tx_count "$block_hex")
             
-            # Get block details including base fee
-            block_data=$(cast block "$block" --rpc-url "$RPC_URL" --json 2>/dev/null || echo "{}")
-            base_fee_hex=$(echo "$block_data" | jq -r '.baseFeePerGas // "0x0"' 2>/dev/null || echo "0x0")
+            # Get block details with base fee
+            block_data=$(curl -s -X POST -H "Content-Type: application/json" \
+                --data '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["'$block_hex'",false],"id":1}' \
+                "$RPC_URL" 2>/dev/null || echo '{"result":{}}')
+            
+            # Extract base fee from JSON response
+            base_fee_hex=$(echo "$block_data" | jq -r '.result.baseFeePerGas // "0x0"' 2>/dev/null || echo "0x0")
             
             # Convert base fee from hex to decimal (wei) and then to gwei
-            if [ "$base_fee_hex" != "0x0" ] && [ "$base_fee_hex" != "null" ]; then
+            if [ "$base_fee_hex" != "0x0" ] && [ "$base_fee_hex" != "null" ] && [ "$base_fee_hex" != "" ]; then
                 base_fee_wei=$(printf "%d" "$base_fee_hex" 2>/dev/null || echo "0")
-                base_fee_gwei=$(echo "scale=2; $base_fee_wei / 1000000000" | bc -l 2>/dev/null || echo "0.00")
+                if [ "$base_fee_wei" -gt 0 ]; then
+                    base_fee_gwei=$(echo "scale=3; $base_fee_wei / 1000000000" | bc -l 2>/dev/null || echo "0.000")
+                else
+                    base_fee_gwei="0.000"
+                fi
             else
-                base_fee_gwei="0.00"
+                base_fee_gwei="0.000"
             fi
             
             # Color based on transaction count
