@@ -522,14 +522,15 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 
 					// Update wallet nonce
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					newNonce, getNonceErr := txSender.GetNonce(ctx, w.Address)
+					recoveredNonce, getNonceErr := txSender.GetNonce(ctx, w.Address)
 					cancel() // Call cancel immediately instead of deferring
 					if getNonceErr != nil {
 						logger.Error("  [W%d] Failed to update nonce for wallet %s: %v\n", idx+1, w.Address.Hex(), getNonceErr)
 					} else {
 						w.Lock()
-						w.Nonce = newNonce
+						w.Nonce = recoveredNonce
 						w.Unlock()
+						logger.Debug("  [W%d] Wallet nonce recovered: %d\n", idx+1, recoveredNonce)
 					}
 
 					// Check for specific error types that indicate gas price issues
