@@ -517,12 +517,15 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 					dbTx.Status = "failed"
 					dbTx.Error = err.Error()
 
+					// Capture error details before reassigning err variable
+					originalErrorMsg := err.Error()
+
 					// Update wallet nonce
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					newNonce, err := txSender.GetNonce(ctx, w.Address)
+					newNonce, getNonceErr := txSender.GetNonce(ctx, w.Address)
 					cancel() // Call cancel immediately instead of deferring
-					if err != nil {
-						logger.Error("  [W%d] Failed to update nonce for wallet %s: %v\n", idx+1, w.Address.Hex(), err)
+					if getNonceErr != nil {
+						logger.Error("  [W%d] Failed to update nonce for wallet %s: %v\n", idx+1, w.Address.Hex(), getNonceErr)
 					} else {
 						w.Lock()
 						w.Nonce = newNonce
@@ -530,19 +533,19 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 					}
 
 					// Check for specific error types that indicate gas price issues
-					isUnderpriced := strings.Contains(err.Error(), "replacement transaction underpriced") ||
-						strings.Contains(err.Error(), "transaction underpriced") ||
-						strings.Contains(err.Error(), "insufficient funds for gas")
+					isUnderpriced := strings.Contains(originalErrorMsg, "replacement transaction underpriced") ||
+						strings.Contains(originalErrorMsg, "transaction underpriced") ||
+						strings.Contains(originalErrorMsg, "insufficient funds for gas")
 
 					if isUnderpriced {
-						logger.Warn("  [W%d] Gas price issue for wallet %s (error: %s)\n", idx+1, w.Address.Hex(), err.Error())
+						logger.Warn("  [W%d] Gas price issue for wallet %s (error: %s)\n", idx+1, w.Address.Hex(), originalErrorMsg)
 						increaseGasPrice()
 					}
 
 					// For nonce errors, log the expected vs actual nonce for debugging
-					if strings.Contains(err.Error(), "nonce too low") {
+					if strings.Contains(originalErrorMsg, "nonce too low") {
 						logger.Warn("  [W%d] Nonce conflict for wallet %s: %s (tx nonce: %d)\n",
-							idx+1, w.Address.Hex(), err.Error(), req.Nonce)
+							idx+1, w.Address.Hex(), originalErrorMsg, req.Nonce)
 					}
 
 					// Print failure reason
