@@ -444,6 +444,7 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 					idx+1, len(wallets), adjustedGasPrice.String(), baseGasPrice.String())
 			}
 
+			w.Lock()
 			txRequests, newNonce, err := txSender.PrepareBatchTransactions(
 				wCtx,
 				toAddress,
@@ -454,6 +455,7 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 				w.PrivateKey,
 				w.Nonce,
 			)
+			w.Unlock()
 
 			if err != nil {
 				logger.Error("[Wallet %d/%d] Error preparing transactions: %v\n", idx+1, len(wallets), err)
@@ -485,9 +487,7 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 				// Per-transaction context so one hung RPC call doesn't block
 				// the wallet goroutine longer than ContextTimeout seconds.
 				txCtx, txCancel := context.WithTimeout(context.Background(), time.Duration(config.ContextTimeout)*time.Second)
-				w.Lock()
 				result, err := txSender.CreateAndSendTransaction(txCtx, req)
-				w.Unlock()
 				txCancel()
 
 				// Guard against nil result (returned when CreateTransaction or
