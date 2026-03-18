@@ -550,6 +550,7 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 
 					// Print failure reason
 					logger.Error("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
+					break // Stop sending further transactions for this wallet on error
 				} else {
 					dbTx.TxHash = result.TxHash
 					dbTx.Status = "pending"

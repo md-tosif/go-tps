@@ -103,13 +103,13 @@ while true; do
             
             # Color based on transaction count
             if [ "$tx_count" -eq 0 ]; then
-                color="$YELLOW"
-            elif [ "$tx_count" -lt 10 ]; then
-                color="$GREEN"  
-            elif [ "$tx_count" -lt 290 ]; then
-                color="$BLUE"
-            else
                 color="$RED"
+            elif [ "$tx_count" -lt 100 ]; then
+                color="$YELLOW"
+            elif [ "$tx_count" -lt 252 ]; then
+                color="$GREEN"  
+            else
+                color="$BLUE"
             fi
             
             echo -e "[$timestamp] ${color}Block #$block: $tx_count txs, Base Fee: ${base_fee_display}${NC}"
