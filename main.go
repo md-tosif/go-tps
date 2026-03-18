@@ -551,22 +551,31 @@ func runSingleExecution(config *config.Config, txSender *txpkg.TransactionSender
 
 					// Print failure reason
 					logger.Error("  [W%d] Tx %d FAILED (nonce %d): %v\n", idx+1, txIdx+1, req.Nonce, err)
+
+					// Queue DB write. Use a select so the goroutine can exit
+					// if the process is shutting down instead of blocking forever.
+					select {
+					case dbWriteChan <- worker.DBWriteJob{Tx: dbTx}:
+					case <-wCtx.Done():
+						logger.Warn("  [W%d] Context expired while queuing DB write for nonce %d; dropping record\n", idx+1, req.Nonce)
+						return
+					}
 					break // Stop sending further transactions for this wallet on error
 				} else {
 					dbTx.TxHash = result.TxHash
 					dbTx.Status = "pending"
 
 					logger.Debug("  [W%d] Tx %d sent (nonce %d): %s\n", idx+1, txIdx+1, req.Nonce, result.TxHash[:16]+"...")
+					// Queue DB write. Use a select so the goroutine can exit
+					// if the process is shutting down instead of blocking forever.
+					select {
+					case dbWriteChan <- worker.DBWriteJob{Tx: dbTx}:
+					case <-wCtx.Done():
+						logger.Warn("  [W%d] Context expired while queuing DB write for nonce %d; dropping record\n", idx+1, req.Nonce)
+						return
+					}
 				}
 
-				// Queue DB write. Use a select so the goroutine can exit
-				// if the process is shutting down instead of blocking forever.
-				select {
-				case dbWriteChan <- worker.DBWriteJob{Tx: dbTx}:
-				case <-wCtx.Done():
-					logger.Warn("  [W%d] Context expired while queuing DB write for nonce %d; dropping record\n", idx+1, req.Nonce)
-					return
-				}
 			}
 
 			logger.Info("  [W%d] ✓ Sent %d transactions (nonce %d to %d)\n",
