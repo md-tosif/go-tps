@@ -73,13 +73,30 @@ while true; do
             timestamp=$(date '+%H:%M:%S')
             block_hex="0x$(printf '%x' $block)"
             
-            # Get transaction count for this block
-            tx_count=$(get_tx_count "$block_hex")
+            # Parallel HTTP requests for better performance
+            (
+                # Get transaction count in background
+                tx_count=$(get_tx_count "$block_hex")
+                echo "TX_COUNT:$tx_count" > /tmp/block_${block}_tx.tmp
+            ) &
             
-            # Get block details with base fee
-            block_data=$(curl -s -X POST -H "Content-Type: application/json" \
-                --data '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["'$block_hex'",false],"id":1}' \
-                "$RPC_URL" 2>/dev/null || echo '{"result":{}}')
+            (
+                # Get block details in background  
+                block_data=$(curl -s -X POST -H "Content-Type: application/json" \
+                    --data '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["'$block_hex'",false],"id":1}' \
+                    "$RPC_URL" 2>/dev/null || echo '{"result":{}}')
+                echo "$block_data" > /tmp/block_${block}_data.tmp
+            ) &
+            
+            # Wait for both background jobs to complete
+            wait
+            
+            # Read results from temp files
+            tx_count=$(cat /tmp/block_${block}_tx.tmp | cut -d: -f2)
+            block_data=$(cat /tmp/block_${block}_data.tmp)
+            
+            # Clean up temp files
+            rm -f /tmp/block_${block}_tx.tmp /tmp/block_${block}_data.tmp
             
             # Extract base fee from JSON response using sed
             base_fee_hex=$(echo "$block_data" | sed -n 's/.*"baseFeePerGas":"\([^"]*\)".*/\1/p' | head -1)
@@ -102,10 +119,12 @@ while true; do
             fi
             
             # Color based on transaction count
-            if [ "$tx_count" -eq 0 ]; then
+            if [ "$tx_count" -eq 100 ]; then
                 color="$RED"
-            elif [ "$tx_count" -lt 100 ]; then
+                (printf "\a\a\a") &  # Triple beep in background
+            elif [ "$tx_count" -lt 150 ]; then
                 color="$YELLOW"
+                (printf "\a") &  # Single beep in background
             elif [ "$tx_count" -lt 252 ]; then
                 color="$GREEN"  
             else
@@ -118,5 +137,5 @@ while true; do
         last_block=$current_block
     fi
     
-    sleep 1
+    sleep 0.5
 done
