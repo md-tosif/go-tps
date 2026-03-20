@@ -44,7 +44,8 @@ def get_1min_intervals_data(db_path, batch_number=None):
             COUNT(*) as submitted_count,
             (SUM(CASE WHEN gas_used > 0 THEN gas_used ELSE gas_limit END) / 60.0) as avg_gas_used_per_second,
             SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failure_count
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failure_count,
+            AVG(execution_time) as avg_execution_time_ms
         FROM transactions 
         {where_clause}
         GROUP BY strftime('%Y-%m-%d %H:%M:00', submitted_at)
